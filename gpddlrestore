@@ -37,7 +37,7 @@ miaochen\@mail.ustc.edu.cn
 ************************************************************************************************
 SYNOPSIS
 ************************************************************************************************
-$CMD_NAME [--database database] [--port port] [-f filename] [--index-out] [--index-only]
+$CMD_NAME [--database database] [--port port] [-f filename] [--object-bit hex string]
     [-B batch_size] [-h|--help] [--version]
 *****************************************************
 OPTIONS
