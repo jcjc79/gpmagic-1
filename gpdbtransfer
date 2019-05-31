@@ -147,7 +147,8 @@ my $STR_SEG_PG_HBA = q^# "local" is for Unix domain socket connections only
 local   all     all                             trust
 # IPv4 local connections:
 host    all     all     127.0.0.1/24            trust
-host    all     all     0/0                     trust
+host    all     all       0.0.0.0/0             trust
+host    all     all           ::0/0             trust
 ^;
 
 my $HEAP_STAT_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by a.idx) from(
