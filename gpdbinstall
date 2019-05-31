@@ -1287,6 +1287,10 @@ MSPT=$6
 DEVC=$7
 Directorys=""
 ##################################################################################
+umask 0022
+mkdir -p /var/core
+chmod 0777 /var/core
+##################################################################################
 CURRENT_USER=`whoami`
 if [ $CURRENT_USER != "root" ];then
     echo "This script can only be executed by the root."
@@ -1380,6 +1384,7 @@ echo '* soft nofile 1048576'         >> /etc/security/limits.conf
 echo '* hard nofile 1048576'         >> /etc/security/limits.conf
 echo '* soft nproc  1048576'         >> /etc/security/limits.conf
 echo '* hard nproc  1048576'         >> /etc/security/limits.conf
+echo '* soft core   unlimited'       >> /etc/security/limits.conf
 nprocname="/etc/security/limits.d/90-nproc.conf"
 if [ -f "/etc/security/limits.d/20-nproc.conf" ];then
     nprocname="/etc/security/limits.d/20-nproc.conf"
@@ -1396,6 +1401,7 @@ kernel.shmmni = 40960
 kernel.shmall = 40000000000
 kernel.sem = 250 5120000 100 20480
 kernel.sysrq = 1
+kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
 kernel.core_uses_pid = 1
 kernel.msgmnb = 1048576
 kernel.msgmax = 1048576
