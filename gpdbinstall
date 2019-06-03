@@ -764,7 +764,11 @@ sub modifySystemConfig{
                 last;
             }
         }
-        logMessage("INFO","Machine $ip $hostname find data path: $path");
+        if($path ne ""){
+            logMessage("INFO","Machine $ip $hostname find data path: $path");
+        }else{
+            errorMessage("Machine $ip $hostname not find data path");
+        }
         if($role =~ "^M" || $role =~ "^ST"){
             if($master_path eq ""){
                 $master_path = $path;
