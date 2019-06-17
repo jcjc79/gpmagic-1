@@ -17,7 +17,7 @@ if($ENV{PATH} !~ "/sbin"){
 my @NEED_COMMAND = ("ip","sed","zip","unzip","less","bash","tar","perl","expect","ssh","ifconfig","mkfs.xfs");
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 
-my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$ENABLE_CORE,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
@@ -67,6 +67,7 @@ $CMD_NAME --hosts-config <filename>
     [--port-base <primary instance port base>]
     [--mirror-split <amount of machine which mirror split to>]
     [--ignore-init]
+    [--core-dump]
     [--expand]
     [--gpconfig <gpconfig parameter and value> [--gpconfig <gpconfig parameter and value>] ...]
     [--verbose | -v]
@@ -197,6 +198,10 @@ OPTIONS
   OS parameter modify.
   SSH keys exchange.
   And so on.
+
+[--core-dump]
+
+  Enable core dump for system.
 
 [--expand]
 
@@ -362,6 +367,7 @@ sub getOption{
         'port-base:i'         => \$PORT_BASE,
         'mirror-split:i'      => \$MIRROR_SPLIT,
         'ignore-init!'        => \$IGNORE_INIT,
+        'core-dump!'          => \$ENABLE_CORE,
         'expand!'             => \$EXPAND,
         'gpconfig:s'          => \@GP_CONFIG,
         'verbose|v!'          => \$VERBOSE,
@@ -395,6 +401,7 @@ sub getOption{
             if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE        = $val;}
             if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT     = $val;}
             if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT      = 1   ;}
+            if("core-dump"       eq $para  && "" eq $ENABLE_CORE     ){$ENABLE_CORE      = 1   ;}
             if("expand"          eq $para  && "" eq $EXPAND          ){$EXPAND           = 1   ;}
             if("gpconfig"        eq $para                            ){push @GP_CONFIG   , $val;}
             if(("verbose"        eq $para  ||
@@ -728,6 +735,10 @@ sub modifySystemConfig{
     }
     my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
     $config_command =~ s/GPSEG/$PREFIX/g;
+    if($ENABLE_CORE){
+        $config_command =~ s/####CORE_LIMIT_CONFIG####//;
+        $config_command =~ s/####CORE_PATTERN_CONFIG####//;
+    }
     print $file_handle $config_command;
     print $file_handle "echo -n '127.0.0.1 = localhost\n";
     print $file_handle "#Greenplum = hosts start\n";
@@ -1388,7 +1399,7 @@ echo '* soft nofile 1048576'         >> /etc/security/limits.conf
 echo '* hard nofile 1048576'         >> /etc/security/limits.conf
 echo '* soft nproc  1048576'         >> /etc/security/limits.conf
 echo '* hard nproc  1048576'         >> /etc/security/limits.conf
-echo '* soft core   unlimited'       >> /etc/security/limits.conf
+####CORE_LIMIT_CONFIG####echo '* soft core   unlimited'       >> /etc/security/limits.conf
 nprocname="/etc/security/limits.d/90-nproc.conf"
 if [ -f "/etc/security/limits.d/20-nproc.conf" ];then
     nprocname="/etc/security/limits.d/20-nproc.conf"
@@ -1405,7 +1416,7 @@ kernel.shmmni = 40960
 kernel.shmall = 40000000000
 kernel.sem = 500 20480000 200 40960
 kernel.sysrq = 1
-kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
+####CORE_PATTERN_CONFIG####kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
 kernel.core_uses_pid = 1
 kernel.msgmnb = 1048576
 kernel.msgmax = 1048576
@@ -1442,7 +1453,7 @@ chmod +x $localfile
 sed -e /^[^#]/d -e /^[[:space:]]*$/d -i $localfile
 echo ''                                                                   >> $localfile
 echo 'touch /var/lock/subsys/local'                                       >> $localfile
-echo 'blockdev --setra 16384 /dev/sd*'                                    >> $localfile
+echo 'for i in /dev/sd*;do blockdev --setra 16384 $i;done'                >> $localfile
 echo 'for i in /sys/block/sd*/queue/scheduler;do echo deadline > $i;done' >> $localfile
 echo 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'           >> $localfile
 sh $localfile                                                                     > /dev/null 2>&1
