@@ -980,7 +980,7 @@ sub getPartitionInformation{
         if(exists $MAP_OF_PARTITION_RULE{$key}){
             @rule_array = @{$MAP_OF_PARTITION_RULE{$key}};
         }
-        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def)];
+        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,trim($rule_def))];
         $MAP_OF_PARTITION_RULE{$key} = [@rule_array];
         $MAP_OF_PARTITION_OID{$parchildrelid} = "";
     }
@@ -1006,6 +1006,8 @@ sub getNextLevelPartition{
                 $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
             }
             $rule_def =~ s/\s+$//;
+        }else{
+            $rule_def = $rule_def." WITH(APPENDONLY=FALSE)";
         }
         if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION /){
             $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
