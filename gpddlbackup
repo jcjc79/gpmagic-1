@@ -937,6 +937,15 @@ sub getDatabaseTablespace{
         errorMessage("Can't find current database's tablespace");
     }
 }
+sub getTableInformation{
+    my @result = queryResult($SQL_GET_TABLE);
+    for my $row(@result){
+        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
+            $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @$row;
+        ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
+        $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,$relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions)];
+    }
+}
 sub getPartitionInformation{
     my @result = queryResult($SQL_GET_PARTITION);
     for my $row(@result){
@@ -959,7 +968,13 @@ sub getPartitionInformation{
     for my $row(@result){
         my ($oid,$paroid,$parchildrelid,$parparentrule,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,
             $parrangestart,$parrangeend,$rule_def) = @$row;
-        ($parname,$parrangestart,$parrangeend,$rule_def) = (quote(decode($parname)),decode($parrangestart),decode($parrangeend),decode($rule_def));
+        ($parname,$parrangestart,$parrangeend,$rule_def) = (decode($parname),decode($parrangestart),decode($parrangeend),decode($rule_def));
+        if($parname eq ""){
+            my $relation = @{$MAP_OF_TABLE{$parchildrelid}}[0];
+            $parname = $relation;
+            $parname =~ s/^.+_prt_//;
+        }
+        $parname = quote($parname);
         my $key = "0" eq $parparentrule ? $paroid."-".$parparentrule : $parparentrule;
         my @rule_array;
         if(exists $MAP_OF_PARTITION_RULE{$key}){
@@ -968,15 +983,6 @@ sub getPartitionInformation{
         push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def)];
         $MAP_OF_PARTITION_RULE{$key} = [@rule_array];
         $MAP_OF_PARTITION_OID{$parchildrelid} = "";
-    }
-}
-sub getTableInformation{
-    my @result = queryResult($SQL_GET_TABLE);
-    for my $row(@result){
-        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
-            $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @$row;
-        ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
-        $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,$relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions)];
     }
 }
 sub getNextLevelPartition{
@@ -1000,6 +1006,9 @@ sub getNextLevelPartition{
                 $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
             }
             $rule_def =~ s/\s+$//;
+        }
+        if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION /){
+            $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
         }
         if(exists $MAP_OF_PARTITION_RULE{$nextKey}){
             push @partition_array,($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getNextLevelPartition($nextKey,$level + 1,$reloptions)."\n".($INDENT x $level).")";
@@ -1480,8 +1489,8 @@ sub main{
     outputFunction();
     outputSequence();
     getDatabaseTablespace();
-    getPartitionInformation();
     getTableInformation();
+    getPartitionInformation();
     outputTable();
     getExtFormat();
     outputExtTable();
