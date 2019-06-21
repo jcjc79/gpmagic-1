@@ -118,7 +118,7 @@ my $SQL_GET_ATTRIBUTE = q{SELECT attrelid,gp_toolkit.mcencode(attname),
 FROM pg_attribute
 WHERE attrelid >= 16384 AND attnum > 0
 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = attrelid);};
-my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(adsrc) FROM pg_attrdef
+my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(pg_get_expr(adbin,adrelid)) FROM pg_attrdef
 WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = adrelid);};
 my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,',') FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
 my $SQL_GET_COMPTYPE = q#SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
