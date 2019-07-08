@@ -451,8 +451,8 @@ OPTIONS
   Displays the command version.
 
 Examples:
-$CMD_NAME --database postgres --port 4371 --time-flag 20140825082500 -a
-$CMD_NAME --database postgres --port 4371 --increment --time-flag 20140825082500 --force-redo -a
+$CMD_NAME --database postgres --port 5432 --time-flag 20140825082500 -a
+$CMD_NAME --database postgres --port 5432 --increment --time-flag 20140825082500 --force-redo -a
 $CMD_NAME -h
 #;
 
@@ -664,6 +664,12 @@ sub checkOption{
     logMessage("INFO","Option values: -B $BATCH_SIZE --directory $DIRECTORY --where $GLOBAL_CONDITION --time-flag $TIME_FLAG");
     logMessage("INFO","Option values: --full $FULL_MODE --increment $INCREMENT --residue $RESIDUE --force-redo $FORCE_REDO");
     logMessage("INFO","Option values: -a $DATA_ONLY --truncate $NEED_TRUNCATE --no-error $NO_ERROR_TABLE --encoding $ENCODING --fast $FAST --parameter-file $PARAMETER_FILE");
+}
+sub checkFailover{
+    my $fail_count = queryResult("select count(*) from gp_segment_configuration where role <> preferred_role;","Scalar");
+    if($fail_count ne 0){
+        errorMessage("Can't execute backup when some instance occur failover");
+    }
 }
 sub processDataDirectory{
     $MASTER_BACKUP_PATH = $DIRECTORY;
@@ -1065,6 +1071,14 @@ sub getLastFullBackupDate{
     }
     return "";
 }
+sub tryCheckpoint{
+    my ($code,$value) = queryResult(qq{CHECKPOINT;},"CV");
+    if($code eq 0){
+        logMessage("INFO","Try to execute checkpoint success");
+    }else{
+        errorMessage("Try to execute checkpoint failed:\n".$value);
+    }
+}
 sub getLastStatFromFile{
     my ($full_time) = @_;
     my %last_stat_map = ();
@@ -1324,6 +1338,7 @@ sub main{
     logMessage("INFO","Run command: ".$_[0]);
     system("unset PGOPTIONS");
     checkOption();
+    checkFailover();
     checkConflictProcess();
     processDataDirectory();
     logMessage("INFO","Backup directory is $MASTER_LOG_PATH");
@@ -1334,6 +1349,7 @@ sub main{
     checkHeapStatFunction();
     mergeIncrementToFull();
     processTableArray();
+    tryCheckpoint();
     processLastBackupStat();
     my $error_count = startBackup();
     if($error_count != 0){

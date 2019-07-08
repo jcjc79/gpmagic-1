@@ -1266,6 +1266,14 @@ sub processTableArray{
         }
     }
 }
+sub tryCheckpoint{
+    my ($code,$value) = queryResult("SRC",qq{CHECKPOINT;},"CV");
+    if($code eq 0){
+        logMessage("INFO","Try to execute checkpoint success");
+    }else{
+        errorMessage("Try to execute checkpoint failed:\n".$value);
+    }
+}
 sub getLastStatFromFile{
     if(!$INCREMENT){
         return ();
@@ -1700,6 +1708,7 @@ sub main{
     generateSrcClusterInfo();
     checkCleverCommand();
     processTableArray();
+    tryCheckpoint();
     processLastTransferStat();
     checkConflictProcess();
     checkTransferSchema();
