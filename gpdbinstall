@@ -17,7 +17,8 @@ if($ENV{PATH} !~ "/sbin"){
 my @NEED_COMMAND = ("ip","sed","zip","unzip","less","bash","tar","perl","expect","ssh","ifconfig","mkfs.xfs");
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 
-my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$ENABLE_CORE,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,
+    $IGNORE_HOSTS,$ENABLE_CORE,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
@@ -67,6 +68,7 @@ $CMD_NAME --hosts-config <filename>
     [--port-base <primary instance port base>]
     [--mirror-split <amount of machine which mirror split to>]
     [--ignore-init]
+    [--ignore-hosts]
     [--core-dump]
     [--expand]
     [--gpconfig <gpconfig parameter and value> [--gpconfig <gpconfig parameter and value>] ...]
@@ -199,6 +201,11 @@ OPTIONS
   SSH keys exchange.
   And so on.
 
+[--ignore-hosts]
+
+  Ignore config hostname and file /etc/hosts.
+  Command will check hostname base on ip address, use this parameter when you make sure your hosts config is good.
+
 [--core-dump]
 
   Enable core dump for system.
@@ -219,7 +226,7 @@ OPTIONS
 
   Command will output verbose message.
 
-[--parameter-file | -- pf <file>]
+[--parameter-file | --pf <file>]
 
   Specify the parameter in file.
   Format:
@@ -228,7 +235,7 @@ OPTIONS
   hosts-config    = hosts-config
   gp-admin-name   = gpadmin
   gp-admin-passwd = gpadminpasswd
-  install-file    = greenplum-db-5.9.0-rhel7-x86_64.zip
+  install-file    = greenplum-db-X.XX.X-rhelX-x86_64.zip
   mas-dev         = /data
   seg-dev         = /data1
   seg-dev         = /data2
@@ -348,7 +355,21 @@ sub executeWithExpect{
     if($VERBOSE){
         logMessage("INFO","Expect output:\n".$output);
     }
-    return $output;
+    return trim($output);
+}
+sub getExpertOutput{
+    my ($output) = @_;
+    my @array;
+    for my $line(split(/\n/,$output)){
+        if($line =~ /^####----/){
+            push @array,trim(substr($line,8));
+        }
+    }
+    if(wantarray()){
+        return @array;
+    }else{
+        return $array[0];
+    }
 }
 sub getOption{
     GetOptions(
@@ -367,6 +388,7 @@ sub getOption{
         'port-base:i'         => \$PORT_BASE,
         'mirror-split:i'      => \$MIRROR_SPLIT,
         'ignore-init!'        => \$IGNORE_INIT,
+        'ignore-hosts!'       => \$IGNORE_HOSTS,
         'core-dump!'          => \$ENABLE_CORE,
         'expand!'             => \$EXPAND,
         'gpconfig:s'          => \@GP_CONFIG,
@@ -401,6 +423,7 @@ sub getOption{
             if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE        = $val;}
             if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT     = $val;}
             if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT      = 1   ;}
+            if("ignore-hosts"    eq $para  && "" eq $IGNORE_HOSTS    ){$IGNORE_HOSTS     = 1   ;}
             if("core-dump"       eq $para  && "" eq $ENABLE_CORE     ){$ENABLE_CORE      = 1   ;}
             if("expand"          eq $para  && "" eq $EXPAND          ){$EXPAND           = 1   ;}
             if("gpconfig"        eq $para                            ){push @GP_CONFIG   , $val;}
@@ -445,7 +468,7 @@ sub checkEnvironment{
 sub checkOption{
     logMessage("INFO","Check options legal".("." x 16));
     if(!-f $HOSTS_CONFIG){
-        errorMessage("Please specify parameter: --hosts-config");
+        errorMessage("File not exists: --hosts-config $HOSTS_CONFIG");
     }
     if($INSTALL_FILE eq "" && $GP_VERSION eq ""){
         errorMessage("Please specify parameter: --install-file or --gp-version");
@@ -602,6 +625,15 @@ sub checkHostsConfig{
     for my $config(@config_list){
         my ($ip,$hostname,$role,$ring) = split(/:/,$config);
         ($ip,$hostname,$role,$ring) = (trim(uc($ip)),trim(lc($hostname)),trim(uc($role)),trim(uc($ring)));
+        if($IGNORE_HOSTS){
+            my $command = qq{$ssh $ip -T "echo '####----'`hostname` && echo '####----'`hostname -i`"};
+            my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+            my ($get_hostname,$get_ip) = getExpertOutput($output);
+            if($get_ip ne $ip){
+                errorMessage("Hostname's ip address is difference with parameter, $ip => $get_ip : $get_hostname");
+            }
+            $hostname = $get_hostname;
+        }
         if(exists $EXISTS_IP_HASH{$ip} || exists $EXISTS_HOST_HASH{$hostname}){
             logMessage("WARN","Host $ip $hostname already exists in current cluster, ignore it for expand");
             next;
@@ -703,8 +735,7 @@ sub checkRingConfig{
     }
     logMessage("INFO","Check ring legal".("." x 16));
     @SEG_INSTALL_CONFIG_ARRAY = sort {$a->[5] <=> $b->[5]} @SEG_INSTALL_CONFIG_ARRAY;
-    my $ring_size = 0;
-    my $index = 0;
+    my ($index,$all_index) = (0,0);
     my $max_index = @SEG_INSTALL_CONFIG_ARRAY - 1;
     my ($pre_ring,$pre_order);
     for my $config(@SEG_INSTALL_CONFIG_ARRAY){
@@ -712,19 +743,17 @@ sub checkRingConfig{
         if($pre_ring == $cur_ring && $pre_order == $cur_order){
             errorMessage("Diffrent host have same order in same ring");
         }
-        if($index == $max_index){
-            $ring_size += 1;
-        }
-        if($ring_size > 0){
-            if($pre_ring != $cur_ring || $index == $max_index){
-                if($ring_size <= $MIRROR_SPLIT){
-                    errorMessage("Host number: $ring_size in one ringe is not enough for mirror split: $MIRROR_SPLIT");
+        if($index > 0 || $all_index == $max_index){
+            if($pre_ring != $cur_ring || $all_index == $max_index){
+                if($index < $MIRROR_SPLIT){
+                    errorMessage("Host number: $index in one ringe is not enough for mirror split: $MIRROR_SPLIT");
                 }
-                $ring_size = 0;
+                $index = 0;
             }
         }
         ($pre_ring,$pre_order) = ($cur_ring,$cur_order);
-        $ring_size += 1;
+        $index += 1;
+        $all_index += 1;
     }
 }
 sub modifySystemConfig{
@@ -735,24 +764,29 @@ sub modifySystemConfig{
     }
     my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
     $config_command =~ s/GPSEG/$PREFIX/g;
-    if($ENABLE_CORE){
-        $config_command =~ s/####CORE_LIMIT_CONFIG####//;
-        $config_command =~ s/####CORE_PATTERN_CONFIG####//;
+    if("" eq $ENABLE_CORE){
+        $config_command =~ s/.*soft core   unlimited.*//;
+        $config_command =~ s/.*kernel.core_pattern.*//;
+    }
+    if("" ne $IGNORE_HOSTS){
+        $config_command =~ s/HOSTNAME_CONFIG_START.*HOSTNAME_CONFIG_END//s;
     }
     print $file_handle $config_command;
-    print $file_handle "echo -n '127.0.0.1 = localhost\n";
-    print $file_handle "#Greenplum = hosts start\n";
-    my ($m_ip,$m_hostname) = @MASTER_CONFIG;
-    my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
-    for my $config(@ALLHOST_CONFIG_ARRAY){
-        my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
-        if((($role =~ /^M/ && $ip eq $m_ip) || ($role =~ /^ST/ && $ip eq $s_ip)) && exists $SEGMENT_IP_HASH{$ip}){
-            next;
+    if("" eq $IGNORE_HOSTS){
+        print $file_handle "echo -n '127.0.0.1 = localhost\n";
+        print $file_handle "#Greenplum = hosts start\n";
+        my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+        my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
+        for my $config(@ALLHOST_CONFIG_ARRAY){
+            my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
+            if((($role =~ /^M/ && $ip eq $m_ip) || ($role =~ /^ST/ && $ip eq $s_ip)) && exists $SEGMENT_IP_HASH{$ip}){
+                next;
+            }
+            print $file_handle "$ip = $hostname\n";
         }
-        print $file_handle "$ip = $hostname\n";
+        print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -e '\''/[[:space:]]"$2"[[:space:]]/d'\'' -e '\''/[[:space:]]"$2"$/d'\'' -i /etc/hosts;echo '\''"$1"    "$2"'\'' >> /etc/hosts")}'#."\n";
+        print $file_handle "##################################################################################\n";
     }
-    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -e '\''/[[:space:]]"$2"[[:space:]]/d'\'' -e '\''/[[:space:]]"$2"$/d'\'' -i /etc/hosts;echo '\''"$1"    "$2"'\'' >> /etc/hosts")}'#."\n";
-    print $file_handle "##################################################################################\n";
     close $file_handle;
     my ($master_path,$segment_path);
     for my $config(@ALLHOST_CONFIG_ARRAY){
@@ -767,14 +801,7 @@ sub modifySystemConfig{
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
         $command = qq{$ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$MASTER_PORT' '$device'"};
         my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        my @array = split(/\n/,trim($output));
-        my $path;
-        for my $line(@array){
-            if($line =~ /^####----/){
-                $path = trim(substr($line,8));
-                last;
-            }
-        }
+        my $path = getExpertOutput($output);
         if($path ne ""){
             logMessage("INFO","Machine $ip $hostname find data path: $path");
         }else{
@@ -1266,6 +1293,7 @@ sub createExpandFile{
     logMessage("INFO","Input config file for gpexpand is: $input_file and $input_file_fs");
 }
 sub main{
+    umask(18);
     getOption();
     checkEnvironment();
     checkOption();
@@ -1378,7 +1406,7 @@ if [ $IS_RHEL == 1 ];then
 elif [ $IS_SuSE == 1 ];then
     yast runlevel delete service=boot.apparmor runlevels=B                        > /dev/null 2>&1
 fi
-##################################################################################
+##################################################################################HOSTNAME_CONFIG_START
 hostname $HSNM
 if [ -f /etc/sysconfig/network ];then
     sed -e /NETWORKING/d -e /HOSTNAME/d -i /etc/sysconfig/network
@@ -1391,7 +1419,7 @@ fi
 if [ -f /etc/HOSTNAME ];then
     echo $HSNM > /etc/HOSTNAME
 fi
-##################################################################################
+##################################################################################HOSTNAME_CONFIG_END
 sed -e s/^ulimit/#ulimit/ -i /etc/profile                                         > /dev/null 2>&1
 sed -e /^[^#]/d -e /^[[:space:]]*$/d -i /etc/security/limits.conf
 echo ''                              >> /etc/security/limits.conf
@@ -1399,7 +1427,7 @@ echo '* soft nofile 1048576'         >> /etc/security/limits.conf
 echo '* hard nofile 1048576'         >> /etc/security/limits.conf
 echo '* soft nproc  1048576'         >> /etc/security/limits.conf
 echo '* hard nproc  1048576'         >> /etc/security/limits.conf
-####CORE_LIMIT_CONFIG####echo '* soft core   unlimited'       >> /etc/security/limits.conf
+echo '* soft core   unlimited'       >> /etc/security/limits.conf
 nprocname="/etc/security/limits.d/90-nproc.conf"
 if [ -f "/etc/security/limits.d/20-nproc.conf" ];then
     nprocname="/etc/security/limits.d/20-nproc.conf"
@@ -1416,7 +1444,7 @@ kernel.shmmni = 40960
 kernel.shmall = 40000000000
 kernel.sem = 500 20480000 200 40960
 kernel.sysrq = 1
-####CORE_PATTERN_CONFIG####kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
+kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
 kernel.core_uses_pid = 1
 kernel.msgmnb = 1048576
 kernel.msgmax = 1048576
@@ -1442,7 +1470,7 @@ vm.dirty_ratio = 0
 vm.dirty_background_bytes = 1610612736
 vm.dirty_bytes = 4294967296
 vm.zone_reclaim_mode = 0
-'|awk -F ' = ' '{system("sed -e /"$1"/d -i /etc/sysctl.conf;echo "$1" = "$2" >> /etc/sysctl.conf")}'
+'|awk -F ' = ' '{if(length($2)>0)system("sed -e /"$1"/d -i /etc/sysctl.conf;echo "$1" = "$2" >> /etc/sysctl.conf")}'
 sysctl -p                                                                         > /dev/null 2>&1
 ##################################################################################
 localfile="/etc/rc.d/rc.local"
