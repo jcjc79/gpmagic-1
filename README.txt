@@ -6,6 +6,7 @@
 邮箱：
 miaochen@mail.ustc.edu.cn      
 
+！！！【在5.20.0和5.20.1版本上暂时无法使用gpmcbackup命令，因为存在Utility模式COPY问题，BUG】！！！    
 使用备份恢复命令，请将  
 gpddlbackup  
 gpddlrestore  
@@ -18,6 +19,7 @@ gpmcrestore
 使用说明可以参考命令的help信息和word文档  
 gpddlbackup已经经过较大范围验证，欢迎试用  
 
+！！！【不能使用gpdbtransfer以5.20.0和5.20.1作为源端，因为存在Utility模式COPY问题，BUG】！！！    
 使用跨集群数据传输命令，请将  
 gpdbtransfer  
 文件直接拷贝到$GPHOME/bin/目录下，修改owner为gpadmin和mod为755：  
