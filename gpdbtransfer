@@ -228,6 +228,10 @@ NMBR=`cat $KEY.info|wc -l`
 NMBR=$((NMBR-1))
 LCNTT=`PGOPTIONS='-c gp_session_role=utility' PGUSER=$USER psql -qtAX -p $LPORT -d template1 -c "show gp_contentid"`
 LCNTT=$(((LCNTT+SEED)%SIZE))
+COPYQ="COPY (SELECT * FROM \"$SCMA\".\"$REL\"$WHERE) TO STDOUT;"
+if [ "" == "$WHERE" ];then
+    COPYQ="COPY \"$SCMA\".\"$REL\" TO STDOUT;"
+fi
 if [[ "TEST" == "$WHERE" && $COMP == 1 ]];then
     for RIP in `cat $KEY.info|awk -F ',' '{print \\$2}'|sort|uniq`;do
         MSG=`timeout -s 9 7 ssh $USER@$RIP -T "echo 1"`
@@ -243,7 +247,7 @@ if [ "M" == "$TYPE" ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
-COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
+$COPYQ
 END_OF_PSQL
         ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
     else
@@ -254,7 +258,7 @@ ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\
 set -o pipefail
 PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
 $LOCK;
-COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
+$COPYQ
 END_OF_INNER_SHELL
 ERR=\\$?;if [ \\$ERR -ne 0 ];then exit \\$ERR;fi
 END_OF_OUTER_SHELL
@@ -276,7 +280,7 @@ else
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
-COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
+$COPYQ
 END_OF_PSQL
                 ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
             else
@@ -287,7 +291,7 @@ ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\
 set -o pipefail
 PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
 $LOCK;
-COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
+$COPYQ
 END_OF_INNER_SHELL
 ERR=\\$?;if [ \\$ERR -ne 0 ];then exit \\$ERR;fi
 END_OF_OUTER_SHELL
