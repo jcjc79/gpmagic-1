@@ -1482,7 +1482,7 @@ if [ -f "/etc/init.d/boot.local" ];then
     localfile="/etc/init.d/boot.local"
 fi
 chmod +x $localfile
-sed -e "/^####GP_BEGIN/,/####GP_END/d" -i $localfile
+sed -e "/^####GP_BEGIN/,/^####GP_END/d" -i $localfile
 echo '####GP_BEGIN'                                                       >> $localfile
 echo 'touch /var/lock/subsys/local'                                       >> $localfile
 echo 'for i in /dev/sd*;do blockdev --setra 16384 $i;done'                >> $localfile
