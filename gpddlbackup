@@ -7,7 +7,8 @@ use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
 use Fcntl qw(:flock);
 use POSIX;
 
-my ($DATABASE_NAME,$PORT,$TO_FILE,$TARGET_VERSION,$IS_HELP,$VERSION);
+my ($DATABASE_NAME,$PORT,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$TO_FILE,$TARGET_VERSION,$IS_HELP,$VERSION);
+my (%SET_OF_INCLUDE_SCHEMA,$INCLUDE_SCHEMA_SIZE,%SET_OF_EXCLUDE_SCHEMA);
 my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
     %MAP_OF_ATTRIBUTE,%MAP_OF_ATTRDEF,%MAP_OF_DISTRIBUTION,%MAP_OF_PARTITION,%MAP_OF_PARTITION_RULE,%MAP_OF_PARTITION_OID,
     %MAP_OF_TABLE,%MAP_OF_VIEW_DEPTH,%MAP_OF_EXTTABLE_FMT,%MAP_OF_INDEX);
@@ -198,7 +199,14 @@ miaochen\@mail.ustc.edu.cn
 ************************************************************************************************
 SYNOPSIS
 ************************************************************************************************
-$CMD_NAME [--database database] [--port port] [-f filename] [--target-version gpversion] [-h|--help] [--version]
+$CMD_NAME [--database database]
+  [--port port]
+  [-s <schema> [-s <schema>] ...]
+  [-S <schema> [-S <schema>] ...]
+  [-f filename]
+  [--target-version gpversion]
+  [-h|--help]
+  [--version]
 
 If you want use psql to execute the backup file, you can use this command to process the backup file:
 
@@ -218,6 +226,20 @@ OPTIONS
   Database port number, If not specified, use \$PGPORT or the default is 5432.
   eg.
   --port 5433
+
+-s <schema name>
+
+  Backup tables in this schema.
+  This option can be specified multiple times to include multiple schemas.
+  eg.:
+  -s public -s myschema
+
+-S <schema name>
+
+  Do not backup tables in this schema.
+  This option can be specified multiple times to include multiple schemas.
+  eg.:
+  -S public -S myschema
 
 -f <filename>
 
@@ -332,6 +354,8 @@ sub getOption{
     GetOptions(
         'database:s'       => \$DATABASE_NAME,
         'port:i'           => \$PORT,
+        's:s'              => \@SCHEMA_ARRAY,
+        'S:s'              => \@EX_SCHEMA_ARRAY, 
         'f:s'              => \$TO_FILE,
         'target-version:i' => \$TARGET_VERSION,
         'h|help!'          => \$IS_HELP,
@@ -369,6 +393,27 @@ sub checkOption{
     }
     if($TARGET_VERSION eq ""){
         $TARGET_VERSION = 5;
+    }
+    if(@SCHEMA_ARRAY > 0 || @EX_SCHEMA_ARRAY > 0){
+        for my $schema(@EX_SCHEMA_ARRAY){
+            $SET_OF_EXCLUDE_SCHEMA{trim($schema)} = "";
+        }
+        for my $schema(@SCHEMA_ARRAY){
+            if(not exists $SET_OF_EXCLUDE_SCHEMA{trim($schema)}){
+                $SET_OF_INCLUDE_SCHEMA{trim($schema)} = "";
+            }
+        }
+        $INCLUDE_SCHEMA_SIZE = keys %SET_OF_INCLUDE_SCHEMA;
+    }
+}
+sub skipThisSchema{
+    my ($schema) = @_;
+    if($INCLUDE_SCHEMA_SIZE > 0 && not exists $SET_OF_INCLUDE_SCHEMA{$schema}){
+        return 1;
+    }elsif(exists $SET_OF_EXCLUDE_SCHEMA{$schema}){
+        return 1;
+    }else{
+        return undef;
     }
 }
 sub getVersion{
@@ -580,7 +625,7 @@ sub outputSchema{
         ($nspname) = (quote(decode($nspname)));
         $MAP_OF_SCHEMA{$oid} = $nspname;
         $nspowner = $MAP_OF_ROLE{$nspowner};
-        if(isTempSchema($nspname)){
+        if(isTempSchema($nspname) || skipThisSchema($nspname)){
             next;
         }
         if($oid >= 16384 || $oid == 2200){
@@ -665,7 +710,7 @@ sub outputCompType{
     for my $row(@result){
         my($oid,$relname,$relnamespace,$relowner,$relnatts) = @$row;
         ($relname,$relnamespace,$relowner) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
-        if(isTempSchema($relnamespace)){
+        if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
         }
         if($begin == 0){
@@ -703,7 +748,7 @@ sub outputEnum{
     for my $row(@result){
         my ($typname,$typnamespace,$typowner,$enumlabel) = @$row;
         ($typname,$typnamespace,$typowner) = (quote(decode($typname)),$MAP_OF_SCHEMA{$typnamespace},$MAP_OF_ROLE{$typowner});
-        if(isTempSchema($typnamespace)){
+        if(isTempSchema($typnamespace) || skipThisSchema($typnamespace)){
             next;
         }
         if($begin == 0){
@@ -733,7 +778,7 @@ sub outputDomain{
     for my $row(@result){
         my ($domname,$domnamespace,$typname,$typnamespace,$domowner) = @$row;
         ($domname,$domnamespace,$typname,$typnamespace,$domowner) = (quote(decode($domname)),$MAP_OF_SCHEMA{$domnamespace},quote(decode($typname)),$MAP_OF_SCHEMA{$typnamespace},$MAP_OF_ROLE{$domowner});
-        if(isTempSchema($domnamespace)){
+        if(isTempSchema($domnamespace) || skipThisSchema($domnamespace)){
             next;
         }
         if($begin == 0){
@@ -804,7 +849,7 @@ sub outputFunction{
         my ($oid,$proname,$pronamespace,$proowner,$prolang,$proisagg,$prosecdef,$proisstrict,$proretset,$provolatile,$pronargs,$prorettype,$proiswin,
             $proargtypes,$proallargtypes,$proargmodes,$proargnames,$prosrc,$probin,$proacl,$prodataaccess) = @$row;
         ($proname,$prosrc,$pronamespace) = (quote(decode($proname)),decode($prosrc),$MAP_OF_SCHEMA{$pronamespace});
-        if(isTempSchema($pronamespace)){
+        if(isTempSchema($pronamespace) || skipThisSchema($pronamespace)){
             next;
         }
         if($begin == 0){
@@ -887,7 +932,7 @@ sub outputSequence{
     my $begin = 0;
     for my $row(@result){
         my ($oid,$relnamespace,$relowner,$relname,$relacl) = @$row;
-        if(isTempSchema($relnamespace)){
+        if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
         }
         if($begin == 0){
@@ -1100,7 +1145,7 @@ sub outputTable{
     for my $oid(keys %MAP_OF_TABLE){
         my ($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
-        if(isTempSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
+        if(isTempSchema($relnamespace) || skipThisSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
             next;
         }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
             outwarn("Table $relnamespace.$relname missing attributes");
@@ -1227,7 +1272,7 @@ sub outputExtTable{
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$relnatts,$relacl) = @$row;
         ($relname,$relnamespace) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace});
-        if(isTempSchema($relnamespace)){
+        if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
         }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
             outwarn("External table $relnamespace.$relname missing attributes");
@@ -1366,7 +1411,7 @@ sub outputView{
         my $begin = 0;
         for my $row(@$depth_list){
             my ($relnamespace,$relname,$relowner,$relacl,$viewdef) = @$row;
-            if(isTempSchema($relnamespace)){
+            if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
                 next;
             }
             if($begin == 0){
@@ -1397,7 +1442,7 @@ sub outputIndex{
             next;
         }
         my ($relname,$nspname) = @{$MAP_OF_TABLE{$relid}};
-        if(isTempSchema($relnamespace) || isTempSchema($nspname)){
+        if(isTempSchema($relnamespace) || skipThisSchema($relnamespace) || isTempSchema($nspname) || skipThisSchema($nspname)){
             next;
         }
         if($begin == 0){
@@ -1425,12 +1470,12 @@ sub outputComment{
         my ($objoid,$classoid,$objsubid,$description) = @$row;
         ($description) = (decode($description));
         $description =~ s/'/''/g;
-        my ($namespace,$output) = ("","");
+        my ($namespace,$output,$t_relname) = ("","","");
         if("1259" eq $classoid){
             if(! exists $MAP_OF_TABLE{$objoid}){
                 next;
             }
-            my ($t_relname,$namespace) = @{$MAP_OF_TABLE{$objoid}};
+            ($t_relname,$namespace) = @{$MAP_OF_TABLE{$objoid}};
             if("0" eq $objsubid){
                 $output = qq{COMMENT ON TABLE $namespace.$t_relname IS '$description';};
             }else{
@@ -1451,10 +1496,10 @@ sub outputComment{
             if(! exists $MAP_OF_SCHEMA{$objoid}){
                 next;
             }
-            my $namespace = $MAP_OF_SCHEMA{$objoid};
+            $namespace = $MAP_OF_SCHEMA{$objoid};
             $output = qq{COMMENT ON SCHEMA $namespace IS '$description';};
         }
-        if($output eq "" || isTempSchema($namespace)){
+        if($output eq "" || isTempSchema($namespace) || skipThisSchema($namespace)){
             next;
         }
         if($begin == 0){
