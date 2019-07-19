@@ -465,6 +465,9 @@ sub outputResourceQueue{
     for my $row(@result){
         my ($oid,$rsqname,$resname,$ressetting,$restypid) = @$row;
         $rsqname = quote(decode($rsqname));
+        if("MEMORY_LIMIT" eq uc($rsqname)){
+            $ressetting = "'".$ressetting."'";
+        }
         if(exists $name_map{$rsqname}){
             $name_map{$rsqname} = $name_map{$rsqname}.qq{,$resname=$ressetting};
         }else{
