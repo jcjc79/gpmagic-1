@@ -1231,10 +1231,10 @@ sub formatFmtOpts{
         $item = $item.$curr;
         if(!$inSingleQuote && ($curr eq ' ' || $index == $size)){
             $item = trim($item);
-            if($item =~ /\\/){
-                $item = "E".$item;
-            }
             if($item =~ /^'/){
+                if($item =~ /\\/){
+                    $item = "E".$item;
+                }
                 if($fmttype eq "b"){
                    $result = $result." = ".$item.",";
                 }else{
