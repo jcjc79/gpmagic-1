@@ -102,7 +102,7 @@ my $SQL_GET_ROLE= qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit
 FROM pg_authid;#;
 my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
-    gp_toolkit.mcencode(fsname)
+    gp_toolkit.mcencode(fsname),gp_toolkit.mcencode(spcacl)
 FROM pg_tablespace ts,pg_filespace fs
 WHERE ts.spcfsoid = fs.oid AND spcname not in('pg_global');#;
 my $SQL_GET_AUTH_MEMBER = q#SELECT roleid,member,grantor,admin_option FROM pg_auth_members;#;
@@ -514,7 +514,7 @@ sub outputTablespace{
     my @result = queryResult($SQL_GET_TABLESPACE);
     my $begin = 0;
     for my $row(@result){
-        my ($oid,$spcname,$spcowner,$fsname) = @$row;
+        my ($oid,$spcname,$spcowner,$fsname,$spcacl) = @$row;
         ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
         $spcowner = $MAP_OF_ROLE{$spcowner};
         $MAP_OF_TABLESPACE{$oid} = $spcname;
@@ -528,6 +528,15 @@ sub outputTablespace{
             output($TASK_SPLIT.$TAIL_TableSpace);
         }
         output(qq{CREATE TABLESPACE $spcname OWNER $spcowner FILESPACE $fsname;});
+        if("" ne $spcacl){
+            for my $option(split(/,/,$spcacl)){
+                my ($role,$value) = split(/:/,$option,2);
+                ($role,$value) = (decode($role),decode($value));
+                $role = "PUBLIC" if "" eq $role;
+                $value =~ s/\/.*$//;
+                output("GRANT ALL ON TABLESPACE $spcname TO $role;");
+            }
+        }
     }
     if($begin > 0){
         output($REGION_END.$TAIL_TableSpace);
