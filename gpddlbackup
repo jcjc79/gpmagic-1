@@ -299,6 +299,22 @@ sub output{
 sub outwarn{
     print STDERR trim($_[0])."\n";
 }
+sub outputTask{
+    my ($task,$indexref,$taskTail) = @_;
+    if($$indexref == 0){
+        output($REGION_START.$taskTail);
+    }else{
+        output($TASK_SPLIT.$taskTail);
+    }
+    output($task);
+    $$indexref += 1;
+}
+sub outputRegionEnd{
+    my ($indexref,$taskTail) = @_;
+    if($$indexref > 0){
+        output($REGION_END.$taskTail);
+    }
+}
 sub encode{
     my ($string) = @_;
     my $encode = encode_base64($string);
@@ -476,44 +492,28 @@ sub outputResourceQueue{
             $MAP_OF_RESOURCE_QUEUE{$oid} = $rsqname;
         }
     }
-    my $begin = 0;
+    my $index = 0;
     for my $rsqname(keys %name_map){
-        if($begin == 0){
-            output($REGION_START.$TAIL_ResourceQueue);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_ResourceQueue);
-        }
         $name_map{$rsqname} = $name_map{$rsqname}.");";
-        output($name_map{$rsqname});
+        outputTask($name_map{$rsqname},\$index,$TAIL_ResourceQueue);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_ResourceQueue);
-    }
+    outputRegionEnd(\$index,$TAIL_ResourceQueue);
 }
 sub outputRole{
     my @result = queryResult($SQL_GET_ROLE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
-        if($begin == 0){
-            output($REGION_START.$TAIL_ROLE);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_ROLE);
-        }
         my ($oid,$rolname,$super,$inherit,$createrole,$createdb,$catupdate,$canlogin,$connlimit,$password,$validuntil,
             $config,$resqueue,$rextgpfd,$rexthttp,$wextgpfd,$rexthdfs,$wexthdfs) = @$row;
         my $rolname = quote(decode($rolname));
-        output(qq{CREATE ROLE $rolname;});
+        outputTask(qq{CREATE ROLE $rolname;},\$index,$TAIL_ROLE);
         $MAP_OF_ROLE{$oid} = $rolname;
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_ROLE);
-    }
+    outputRegionEnd(\$index,$TAIL_ROLE);
 }
 sub outputTablespace{
     my @result = queryResult($SQL_GET_TABLESPACE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$spcname,$spcowner,$fsname,$spcacl) = @$row;
         ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
@@ -522,13 +522,7 @@ sub outputTablespace{
         if($spcname eq "pg_default"){
             next;
         }
-        if($begin == 0){
-            output($REGION_START.$TAIL_TableSpace);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_TableSpace);
-        }
-        output(qq{CREATE TABLESPACE $spcname OWNER $spcowner FILESPACE $fsname;});
+        outputTask(qq{CREATE TABLESPACE $spcname OWNER $spcowner FILESPACE $fsname;},\$index,$TAIL_TableSpace);
         if("" ne $spcacl){
             for my $option(split(/,/,$spcacl)){
                 my ($role,$value) = split(/:/,$option,2);
@@ -539,20 +533,12 @@ sub outputTablespace{
             }
         }
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_TableSpace);
-    }
+    outputRegionEnd(\$index,$TAIL_TableSpace);
 }
 sub outputRoleSetting{
     my @result = queryResult($SQL_GET_ROLE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
-        if($begin == 0){
-            output($REGION_START.$TAIL_RoleSetting);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_RoleSetting);
-        }
         my ($oid,$rolname,$super,$inherit,$createrole,$createdb,$catupdate,$canlogin,$connlimit,$password,$validuntil,
             $config,$resqueue,$rextgpfd,$rexthttp,$wextgpfd,$rexthdfs,$wexthdfs) = @$row;
         my $rolname = quote(decode($rolname));
@@ -570,10 +556,12 @@ sub outputRoleSetting{
         $alter = $alter.($rextgpfd eq "t" ? " CREATEEXTTABLE (protocol='gpfdist',type='readable')" : "");
         $alter = $alter.($rexthttp eq "t" ? " CREATEEXTTABLE (protocol='http',type='readable')" : "");
         $alter = $alter.($wextgpfd eq "t" ? " CREATEEXTTABLE (protocol='gpfdist',type='writable')" : "");
-        $alter = $alter.($rexthdfs eq "t" ? " CREATEEXTTABLE (protocol='gphdfs',type='readable')" : "");
-        $alter = $alter.($wexthdfs eq "t" ? " CREATEEXTTABLE (protocol='gphdfs',type='writable')" : "");
+        if($TARGET_VERSION < 5){
+            $alter = $alter.($rexthdfs eq "t" ? " CREATEEXTTABLE (protocol='gphdfs',type='readable')" : "");
+            $alter = $alter.($wexthdfs eq "t" ? " CREATEEXTTABLE (protocol='gphdfs',type='writable')" : "");
+        }
         $alter = $alter.("$super $rextgpfd $rexthttp $wextgpfd $rexthdfs $wexthdfs" eq "f f f f f f" ? " NOCREATEEXTTABLE" : "");
-        output($alter.";");
+        outputTask($alter.";",\$index,$TAIL_RoleSetting);
         if("" ne $config){
             my @config_list = decode(split(/,/,$config));
             for my $option(@config_list){
@@ -588,52 +576,31 @@ sub outputRoleSetting{
     }
     @result = queryResult($SQL_GET_AUTH_MEMBER);
     for my $row(@result){
-        output($TASK_SPLIT.$TAIL_RoleSetting);
         my ($role,$member,$grantor,$admin_option) = @$row;
         ($role,$member,$grantor) = ($MAP_OF_ROLE{$role},$MAP_OF_ROLE{$member},$MAP_OF_ROLE{$grantor});
         my $grant = qq{GRANT $role TO $member};
         $grant = $grant.($admin_option eq "t" ? " WITH ADMIN OPTION" : "");
         $grant = $grant.("" ne $grantor ? " GRANTED BY $grantor" : "");
-        if($begin == 0){
-            output($REGION_START.$TAIL_RoleSetting);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_RoleSetting);
-        }
-        output($grant.";");
+        outputTask($grant.";",\$index,$TAIL_RoleSetting);
     }
     my %auth_map = ("a" => "INSERT","r" => "SELECT","ar" => "ALL","ra" => "ALL");
     my @result = queryResult($SQL_GET_EXTPROTOCOL);
     for my $row(@result){
-        if($begin == 0){
-            output($REGION_START.$TAIL_RoleSetting);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_RoleSetting);
-        }
         my ($ptcname,$ptcacl) = @$row;
         my ($role,$value) = split(/:/,$ptcacl,2);
         ($role,$value) = (decode($role),decode($value));
         $value =~ s/\/.*$//;
-        output("GRANT ".$auth_map{$value}." ON PROTOCOL ".$ptcname." TO ".$role.";");
+        outputTask("GRANT ".$auth_map{$value}." ON PROTOCOL ".$ptcname." TO ".$role.";",\$index,$TAIL_RoleSetting);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_RoleSetting);
-    }
+    outputRegionEnd(\$index,$TAIL_RoleSetting);
 }
 sub outputLanguage{
     my @result = queryResult($SQL_GET_LANGUAGE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$lanname,$lanispl,$lanpltrusted,$lanplcallfoid,$lanvalidator,$lanacl) = @$row;
         if($oid >= 16384){
-            if($begin == 0){
-                output($REGION_START.$TAIL_Language);
-                $begin = 1;
-            }else{
-                output($TASK_SPLIT.$TAIL_Language);
-            }
-            output(qq{CREATE LANGUAGE $lanname;});
+            outputTask(qq{CREATE LANGUAGE $lanname;},\$index,$TAIL_Language);
             if("" ne $lanacl){
                 for my $option(split(/,/,$lanacl)){
                     my ($role,$value) = split(/:/,$option,2);
@@ -646,14 +613,12 @@ sub outputLanguage{
         }
         $MAP_OF_LANGUAGE{$oid} = $lanname;
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Language);
-    }
+    outputRegionEnd(\$index,$TAIL_Language);
 }
 sub outputSchema{
     my %auth_map = ("U" => "USAGE","C" => "CREATE","UC" => "ALL","CU" => "ALL");
     my @result = queryResult($SQL_GET_SCHEMA);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$nspname,$nspowner,$nspacl) = @$row;
         ($nspname) = (quote(decode($nspname)));
@@ -663,32 +628,24 @@ sub outputSchema{
             next;
         }
         if($oid >= 16384 || $oid == 2200){
-            if($begin == 0){
-                output($REGION_START.$TAIL_Schema);
-                $begin = 1;
-            }else{
-                output($TASK_SPLIT.$TAIL_Schema);
-            }
             if($oid >= 16384){
-                output(qq{CREATE SCHEMA $nspname;});
-            }
-            if("" ne $nspowner){
-                output(qq{ALTER SCHEMA $nspname OWNER TO $nspowner;});
-            }
-            if("" ne $nspacl){
-                for my $option(split(/,/,$nspacl)){
-                    my ($role,$value) = split(/:/,$option,2);
-                    ($role,$value) = (decode($role),decode($value));
-                    $role = "PUBLIC" if "" eq $role;
-                    $value =~ s/\/.*$//;
-                    output("GRANT $auth_map{$value} ON SCHEMA $nspname TO $role;");
+                outputTask(qq{CREATE SCHEMA $nspname;},\$index,$TAIL_Schema);
+                if("" ne $nspowner){
+                    output(qq{ALTER SCHEMA $nspname OWNER TO $nspowner;});
+                }
+                if("" ne $nspacl){
+                    for my $option(split(/,/,$nspacl)){
+                        my ($role,$value) = split(/:/,$option,2);
+                        ($role,$value) = (decode($role),decode($value));
+                        $role = "PUBLIC" if "" eq $role;
+                        $value =~ s/\/.*$//;
+                        output("GRANT $auth_map{$value} ON SCHEMA $nspname TO $role;");
+                    }
                 }
             }
         }
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Schema);
-    }
+    outputRegionEnd(\$index,$TAIL_Schema);
 }
 sub getTypeInformation{
     my @result = queryResult($SQL_GET_TYPE);
@@ -740,18 +697,12 @@ sub getAttributeInformation{
 }
 sub outputCompType{
     my @result = queryResult($SQL_GET_COMPTYPE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my($oid,$relname,$relnamespace,$relowner,$relnatts) = @$row;
         ($relname,$relnamespace,$relowner) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
-        }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Type);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Type);
         }
         my @attibute_array;
         for my $relattindex(1 .. $relnatts){
@@ -767,29 +718,21 @@ sub outputCompType{
         $create = $create.join(",\n",@attibute_array);
         $create = $create."\n);\n";
         $create = $create."ALTER TYPE $relnamespace.$relname OWNER TO $relowner;";
-        output($create);
+        outputTask($create,\$index,$TAIL_Type);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Type);
-    }
+    outputRegionEnd(\$index,$TAIL_Type);
 }
 sub outputEnum{
     if($DATABASE_VERSION < 5){
         return;
     }
     my @result = queryResult($SQL_GET_ENUM);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($typname,$typnamespace,$typowner,$enumlabel) = @$row;
         ($typname,$typnamespace,$typowner) = (quote(decode($typname)),$MAP_OF_SCHEMA{$typnamespace},$MAP_OF_ROLE{$typowner});
         if(isTempSchema($typnamespace) || skipThisSchema($typnamespace)){
             next;
-        }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Type);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Type);
         }
         my $create = qq{CREATE TYPE $typnamespace.$typname AS ENUM (\n};
         my @label_array;
@@ -800,34 +743,24 @@ sub outputEnum{
         }
         $create = $create.join(",\n",@label_array)."\n);\n";
         $create = $create."ALTER TYPE $typnamespace.$typname OWNER TO $typowner;";
-        output($create);
+        outputTask($create,\$index,$TAIL_Type);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Type);
-    }
+    outputRegionEnd(\$index,$TAIL_Type);
 }
 sub outputDomain{
     my @result = queryResult($SQL_GET_DOMAIN);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($domname,$domnamespace,$typname,$typnamespace,$domowner) = @$row;
         ($domname,$domnamespace,$typname,$typnamespace,$domowner) = (quote(decode($domname)),$MAP_OF_SCHEMA{$domnamespace},quote(decode($typname)),$MAP_OF_SCHEMA{$typnamespace},$MAP_OF_ROLE{$domowner});
         if(isTempSchema($domnamespace) || skipThisSchema($domnamespace)){
             next;
         }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Type);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Type);
-        }
         my $create = qq{CREATE DOMAIN $domnamespace.$domname AS $typnamespace.$typname;\n};
         $create = $create."ALTER DOMAIN $domnamespace.$domname OWNER TO $domowner;";
-        output($create);
+        outputTask($create,\$index,$TAIL_Type);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Type);
-    }
+    outputRegionEnd(\$index,$TAIL_Type);
 }
 sub getArrayFromCommaSeparatedList{
     my ($string) = @_;
@@ -878,19 +811,13 @@ sub getFunctionArgDef{
 sub outputFunction{
     my @result = queryResult($SQL_GET_FUNCTION);
     my %volatile = ("s" => "STABLE","i" => "IMMUTABLE","v" => "VOLATILE");
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$proname,$pronamespace,$proowner,$prolang,$proisagg,$prosecdef,$proisstrict,$proretset,$provolatile,$pronargs,$prorettype,$proiswin,
             $proargtypes,$proallargtypes,$proargmodes,$proargnames,$prosrc,$probin,$proacl,$prodataaccess) = @$row;
         ($proname,$prosrc,$pronamespace) = (quote(decode($proname)),decode($prosrc),$MAP_OF_SCHEMA{$pronamespace});
         if(isTempSchema($pronamespace) || skipThisSchema($pronamespace)){
             next;
-        }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Function);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Function);
         }
         my $create = qq{CREATE OR REPLACE FUNCTION $pronamespace.$proname(};
         my $arguments = "";
@@ -921,7 +848,7 @@ sub outputFunction{
             $create = $create."\n AS '$probin', '$prosrc'\n";
         }
         $create = $create." LANGUAGE ".$MAP_OF_LANGUAGE{$prolang}." ".$volatile{$provolatile}.("t" eq $proisstrict ? " STRICT" : "").";";
-        output($create);
+        outputTask($create,\$index,$TAIL_Function);
         $MAP_OF_FUNCTION{$oid} = qq{$pronamespace.$proname($argstype)};
         $proowner = $MAP_OF_ROLE{$proowner};
         output(qq{ALTER FUNCTION $pronamespace.$proname($argstype) OWNER TO $proowner;});
@@ -935,9 +862,7 @@ sub outputFunction{
             }
         }
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Function);
-    }
+    outputRegionEnd(\$index,$TAIL_Function);
 }
 sub outputSequence{
     my @result = queryResult($SQL_GET_SEQUENCE);
@@ -963,22 +888,16 @@ sub outputSequence{
         }
     }
     my %aclmap = ("U" => "USAGE","r" => "SELECT","w" => "UPDATE");
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$relnamespace,$relowner,$relname,$relacl) = @$row;
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
         }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Sequence);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Sequence);
-        }
         my ($increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled) = @{$temp_hash{$oid}};
         my $create_sql = qq{CREATE SEQUENCE $relnamespace.$relname INCREMENT BY $increment_by MINVALUE $min_value MAXVALUE $max_value START $last_value CACHE $cache_value};
         $create_sql = $create_sql.("t" eq $is_cycled ? " CYCLE" : " NO CYCLE").";";
-        output($create_sql);
+        outputTask($create_sql,\$index,$TAIL_Sequence);
         output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
         if("" ne $relacl){
             for my $option(split(/,/,$relacl)){
@@ -998,9 +917,7 @@ sub outputSequence{
             }
         }
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Sequence);
-    }
+    outputRegionEnd(\$index,$TAIL_Sequence);
 }
 sub getDatabaseTablespace{
     my @result = queryResult($SQL_GET_DATABASE_TABLESPACE);
@@ -1157,12 +1074,15 @@ sub getPartitionDefinition{
 sub getRelationAuth{
     my ($relnamespace,$relname,$relowner,$relacl) = @_;
     my @auth_array;
+    push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $relowner;";
     for my $acl(split(/,/,$relacl)){
         my ($role,$value) = split(/:/,$acl,2);
         ($role,$value) = (decode($role),decode($value));
         $role = "PUBLIC" if "" eq $role;
         $value =~ s/\/.*$//;
-        if($role eq $relowner or $value eq "arwdDxt"){
+        if($role eq $relowner){
+            next;
+        }elsif($value eq "arwdDxt"){
             push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $role;";
         }else{
            my @acl_array;
@@ -1175,7 +1095,7 @@ sub getRelationAuth{
     return join("\n",@auth_array)
 }
 sub outputTable{
-    my $begin = 0;
+    my $index = 0;
     for my $oid(keys %MAP_OF_TABLE){
         my ($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
@@ -1190,12 +1110,6 @@ sub outputTable{
         }elsif("t" eq $relhassubclass && !exists $MAP_OF_PARTITION{$oid}){
             outwarn("Partition table $relnamespace.$relname has no subpartition information");
             next;
-        }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Table);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Table);
         }
         my @attibute_array;
         for my $relattindex(1 .. $relnatts){
@@ -1227,15 +1141,11 @@ sub outputTable{
         }else{
             $create = $create."\n;\n";
         }
-        output($create);
+        outputTask($create,\$index,$TAIL_Table);
         output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
-        if("" ne $relacl){
-            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
-        }
+        output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Table);
-    }
+    outputRegionEnd(\$index,$TAIL_Table);
 }
 sub formatFmtOpts{
     my ($fmttype,$fmtopts) = @_;
@@ -1298,7 +1208,7 @@ sub getExtFormat{
 }
 sub outputExtTable{
     my @result = queryResult($SQL_GET_EXTTABLE);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$relnatts,$relacl) = @$row;
         ($relname,$relnamespace) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace});
@@ -1307,12 +1217,6 @@ sub outputExtTable{
         }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
             outwarn("External table $relnamespace.$relname missing attributes");
             next;
-        }
-        if($begin == 0){
-            output($REGION_START.$TAIL_ExtTable);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_ExtTable);
         }
         my ($location,$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable) = @{$MAP_OF_EXTTABLE_FMT{$oid}};
         my $create = "CREATE ".($writable eq "t" ? "WRITABLE" : "READABLE")." EXTERNAL ".("" eq $command ? "TABLE " : "WEB TABLE ").$relnamespace.".".$relname."(\n";
@@ -1369,16 +1273,12 @@ sub outputExtTable{
             $create = $create."SEGMENT REJECT LIMIT $rejectlimit ".("p" eq $rejectlimittype ? "PERCENT" : "ROWS");
         }
         $create = $create.";\n";
-        output($create);
+        outputTask($create,\$index,$TAIL_ExtTable);
         $relowner = $MAP_OF_ROLE{$relowner};
         output(qq{ALTER EXTERNAL TABLE $relnamespace.$relname OWNER TO $relowner;});
-        if("" ne $relacl){
-            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
-        }
+        output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_ExtTable);
-    }
+    outputRegionEnd(\$index,$TAIL_ExtTable);
 }
 sub getViewDepth{
     my @result = queryResult($SQL_GET_VIEW_DEPEND);
@@ -1438,32 +1338,22 @@ sub outputView{
         $temp_depth_array[$depth] = [@view_array];
     }
     for my $depth_list(@temp_depth_array){
-        my $begin = 0;
+        my $index = 0;
         for my $row(@$depth_list){
             my ($relnamespace,$relname,$relowner,$relacl,$viewdef) = @$row;
             if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
                 next;
             }
-            if($begin == 0){
-                output($REGION_START.$TAIL_View);
-                $begin = 1;
-            }else{
-                output($TASK_SPLIT.$TAIL_View);
-            }
-            output(qq{CREATE OR REPLACE VIEW $relnamespace.$relname AS $viewdef});
+            outputTask(qq{CREATE OR REPLACE VIEW $relnamespace.$relname AS $viewdef},\$index,$TAIL_View);
             output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
-            if("" ne $relacl){
-                output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
-            }
+            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
         }
-        if($begin > 0){
-            output($REGION_END.$TAIL_View);
-        }
+        outputRegionEnd(\$index,$TAIL_View);
     }
 }
 sub outputIndex{
     my @result = queryResult($SQL_GET_INDEX);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($relid,$relnamespace,$indexdef) = @$row;
         $relnamespace = $MAP_OF_SCHEMA{$relnamespace};
@@ -1475,27 +1365,19 @@ sub outputIndex{
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace) || isTempSchema($nspname) || skipThisSchema($nspname)){
             next;
         }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Index);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Index);
-        }
         ($indexdef) = (decode($indexdef));
         my ($create,$def) = split(/ ON /,$indexdef,2);
         my ($check_schema) = split(/\./,$def,2);
         if($check_schema ne $nspname){
             $def = $nspname.".".$def;
         }
-        output(qq{$create ON $def;});
+        outputTask(qq{$create ON $def;},\$index,$TAIL_Index);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Index);
-    }
+    outputRegionEnd(\$index,$TAIL_Index);
 }
 sub outputComment{
     my @result = queryResult($SQL_GET_COMMENT);
-    my $begin = 0;
+    my $index = 0;
     for my $row(@result){
         my ($objoid,$classoid,$objsubid,$description) = @$row;
         ($description) = (decode($description));
@@ -1532,17 +1414,9 @@ sub outputComment{
         if($output eq "" || isTempSchema($namespace) || skipThisSchema($namespace)){
             next;
         }
-        if($begin == 0){
-            output($REGION_START.$TAIL_Comment);
-            $begin = 1;
-        }else{
-            output($TASK_SPLIT.$TAIL_Comment);
-        }
-        output($output);
+        outputTask($output,\$index,$TAIL_Comment);
     }
-    if($begin > 0){
-        output($REGION_END.$TAIL_Comment);
-    }
+    outputRegionEnd(\$index,$TAIL_Comment);
 }
 sub main{
     getOption();
