@@ -100,6 +100,7 @@ my $SQL_GET_ROLE= qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit
    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
    rolcreaterexthdfs,rolcreatewexthdfs
 FROM pg_authid;#;
+my $SQL_GET_EXTPROTOCOL = qq{SELECT ptcname,unnest(string_to_array(gp_toolkit.mcencode(ptcacl),',')) from pg_extprotocol;};
 my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
     gp_toolkit.mcencode(fsname),gp_toolkit.mcencode(spcacl)
@@ -593,7 +594,28 @@ sub outputRoleSetting{
         my $grant = qq{GRANT $role TO $member};
         $grant = $grant.($admin_option eq "t" ? " WITH ADMIN OPTION" : "");
         $grant = $grant.("" ne $grantor ? " GRANTED BY $grantor" : "");
+        if($begin == 0){
+            output($REGION_START.$TAIL_RoleSetting);
+            $begin = 1;
+        }else{
+            output($TASK_SPLIT.$TAIL_RoleSetting);
+        }
         output($grant.";");
+    }
+    my %auth_map = ("a" => "INSERT","r" => "SELECT","ar" => "ALL","ra" => "ALL");
+    my @result = queryResult($SQL_GET_EXTPROTOCOL);
+    for my $row(@result){
+        if($begin == 0){
+            output($REGION_START.$TAIL_RoleSetting);
+            $begin = 1;
+        }else{
+            output($TASK_SPLIT.$TAIL_RoleSetting);
+        }
+        my ($ptcname,$ptcacl) = @$row;
+        my ($role,$value) = split(/:/,$ptcacl,2);
+        ($role,$value) = (decode($role),decode($value));
+        $value =~ s/\/.*$//;
+        output("GRANT ".$auth_map{$value}." ON PROTOCOL ".$ptcname." TO ".$role.";");
     }
     if($begin > 0){
         output($REGION_END.$TAIL_RoleSetting);
