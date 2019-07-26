@@ -234,7 +234,7 @@ if [ "" == "$WHERE" ];then
 fi
 if [[ "TEST" == "$WHERE" && $COMP == 1 ]];then
     for RIP in `cat $KEY.info|awk -F ',' '{print \\$2}'|sort|uniq`;do
-        MSG=`timeout -s 9 7 ssh $USER@$RIP -T "echo 1"`
+        MSG=`ssh $USER@$RIP -T "echo 1"`
         ERR=$?;if [[ $ERR -ne 0 || $MSG -ne 1 ]];then exit 2;fi
     done
 fi
