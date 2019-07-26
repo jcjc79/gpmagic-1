@@ -23,6 +23,7 @@ my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARR
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
+        "default_statistics_target"                   => "-v 15 -m 15"
         "max_appendonly_tables"                       => "-v 50000 -m 50000",
         "gp_max_partition_level"                      => "-v 1 -m 1",
         "log_min_duration_statement"                  => "-v 30000 -m 30000",
@@ -1456,6 +1457,7 @@ kernel.msgmni = 32768
 net.ipv4.tcp_syncookies = 1
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.tcp_max_syn_backlog = 32768
+net.ipv4.tcp_syn_retries = 3
 net.ipv4.tcp_tw_recycle = 0
 net.ipv4.conf.all.arp_filter = 1
 net.ipv4.ip_local_port_range = 1025 65535
@@ -1484,7 +1486,6 @@ fi
 chmod +x $localfile
 sed -e "/^####GP_BEGIN/,/^####GP_END/d" -i $localfile
 echo '####GP_BEGIN'                                                       >> $localfile
-echo 'touch /var/lock/subsys/local'                                       >> $localfile
 echo 'for i in /dev/sd*;do blockdev --setra 16384 $i;done'                >> $localfile
 echo 'for i in /sys/block/sd*/queue/scheduler;do echo deadline > $i;done' >> $localfile
 echo 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'           >> $localfile
