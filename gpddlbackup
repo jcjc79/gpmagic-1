@@ -29,7 +29,7 @@ my $REGION_START  = qq#--REGION-START-#.$CMD_SPLIT;
 my $REGION_END    = qq#--REGION-END---#.$CMD_SPLIT;
 my $TASK_SPLIT    = qq#--TASK---SPLIT-#.$CMD_SPLIT;
 
-my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
+my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords() WHERE catcode <> 'U';#;
 my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY x.idx),md5(prosrc)  prosrc FROM (
     SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
         WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
@@ -829,7 +829,7 @@ sub outputFunction{
             my @argument_array = ();
             my @argstype_array = ();
             for my $index(0 .. @type_array - 1){
-                my $argument = ($mode_array[$index] eq "o" ? "OUT " : "").("" eq $name_array[$index] ? "" : quote($name_array[$index])." ").$MAP_OF_TYPE{$type_array[$index]};
+                my $argument = ($mode_array[$index] eq "o" ? "OUT " : "").("" eq $name_array[$index] ? "" : quote($name_array[$index])." ").quote($MAP_OF_TYPE{$type_array[$index]});
                 push @argstype_array,$argument;
                 if($TARGET_VERSION > 4 && exists $MAP_OF_FUNCTION_ARGDEF{$oid."-".$index}){
                     $argument = $argument." DEFAULT ".$MAP_OF_FUNCTION_ARGDEF{$oid."-".$index};
@@ -840,7 +840,7 @@ sub outputFunction{
             $argstype = join(", ",@argstype_array);
             $create = $create.$arguments;
         }
-        $create = $create.") RETURNS";
+        $create = $create.") RETURNS".("t" eq $proretset ? " SETOF" : "");
         $create = $create." ".$MAP_OF_TYPE{$prorettype};
         if("-" eq $probin || "" eq $probin){
             $create = $create.' AS $BODY$'.$prosrc.'$BODY$';
