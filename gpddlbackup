@@ -1074,15 +1074,15 @@ sub getPartitionDefinition{
 sub getRelationAuth{
     my ($relnamespace,$relname,$relowner,$relacl) = @_;
     my @auth_array;
-    push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $relowner;";
     for my $acl(split(/,/,$relacl)){
         my ($role,$value) = split(/:/,$acl,2);
         ($role,$value) = (decode($role),decode($value));
         $role = "PUBLIC" if "" eq $role;
         $value =~ s/\/.*$//;
         if($role eq $relowner){
-            next;
-        }elsif($value eq "arwdDxt"){
+            push @auth_array,"REVOKE ALL ON TABLE $relnamespace.$relname FROM $role;";
+        }
+        if($value eq "arwdDxt"){
             push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $role;";
         }else{
            my @acl_array;
@@ -1143,7 +1143,9 @@ sub outputTable{
         }
         outputTask($create,\$index,$TAIL_Table);
         output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
-        output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+        if($relacl ne ""){
+            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+        }
     }
     outputRegionEnd(\$index,$TAIL_Table);
 }
@@ -1276,7 +1278,9 @@ sub outputExtTable{
         outputTask($create,\$index,$TAIL_ExtTable);
         $relowner = $MAP_OF_ROLE{$relowner};
         output(qq{ALTER EXTERNAL TABLE $relnamespace.$relname OWNER TO $relowner;});
-        output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+        if($relacl ne ""){
+            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+        }
     }
     outputRegionEnd(\$index,$TAIL_ExtTable);
 }
@@ -1346,7 +1350,9 @@ sub outputView{
             }
             outputTask(qq{CREATE OR REPLACE VIEW $relnamespace.$relname AS $viewdef},\$index,$TAIL_View);
             output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
-            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+            if($relacl ne ""){
+                output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+            }
         }
         outputRegionEnd(\$index,$TAIL_View);
     }
