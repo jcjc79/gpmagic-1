@@ -304,7 +304,7 @@ fi
 ^;
 ############################################################
 my $HELP_MESSAGE = qq(COMMAND NAME: $CMD_NAME
-Transfer data between Greenplum database use external table with transform on gpfdist.
+Transfer data between Greenplum database use external execute table.
 
 Developed by Miao Chen
 
