@@ -12,6 +12,7 @@ my (%SET_OF_INCLUDE_SCHEMA,$INCLUDE_SCHEMA_SIZE,%SET_OF_EXCLUDE_SCHEMA);
 my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
     %MAP_OF_ATTRIBUTE,%MAP_OF_ATTRDEF,%MAP_OF_DISTRIBUTION,%MAP_OF_PARTITION,%MAP_OF_PARTITION_RULE,%MAP_OF_PARTITION_OID,
     %MAP_OF_TABLE,%MAP_OF_VIEW_DEPTH,%MAP_OF_EXTTABLE_FMT,%MAP_OF_INDEX);
+my (@TABLE_PARTITIONS_ORDER_ARRAY);
 my ($DATABASE_TABLESPACE,$DATABASE_VERSION);
 my ($FILE_HANDLE);
 my ($SQL_BATCH) = (300);
@@ -156,6 +157,7 @@ my $SQL_GET_TABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relo
     relhasoids,relhaspkey,relhasrules,relhassubclass,gp_toolkit.mcencode(relacl),
     array_to_string(reloptions,',')
 FROM pg_class WHERE (relnamespace >= 16384 OR relnamespace = 2200) AND relkind = 'r' AND relstorage <> 'x';};
+my $SQL_GET_PARTITION_ORDER = qq{SELECT parrelid FROM pg_partition p, pg_partition_rule r WHERE p.oid = r.paroid GROUP BY 1 ORDER BY count(*) DESC;};
 my $SQL_GET_VIEW_DEPEND = q{SELECT v.oid void,t.oid toid,t.relkind kind
 FROM pg_class v,pg_namespace nv,pg_depend dv,pg_class t,pg_namespace nt,pg_depend dt
 WHERE dv.objid = dt.objid AND dv.refobjid <> dt.refobjid
@@ -941,6 +943,22 @@ sub getTableInformation{
         ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,$relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions)];
     }
+    @result = queryResult($SQL_GET_PARTITION_ORDER);
+    my %temp_set = ();
+    for my $row(@result){
+        my ($oid) = @$row;
+        if(not exists $MAP_OF_TABLE{$oid}){
+            next;
+        }
+        push @TABLE_PARTITIONS_ORDER_ARRAY,$oid;
+        $temp_set{$oid} = undef;
+    }
+    for my $oid(keys %MAP_OF_TABLE){
+        if(exists $temp_set{$oid} || exists $MAP_OF_PARTITION_OID{$oid}){
+            next;
+        }
+        push @TABLE_PARTITIONS_ORDER_ARRAY,$oid;
+    }
 }
 sub getPartitionInformation{
     my @result = queryResult($SQL_GET_PARTITION);
@@ -1096,7 +1114,7 @@ sub getRelationAuth{
 }
 sub outputTable{
     my $index = 0;
-    for my $oid(keys %MAP_OF_TABLE){
+    for my $oid(@TABLE_PARTITIONS_ORDER_ARRAY){
         my ($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
