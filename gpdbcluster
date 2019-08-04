@@ -323,8 +323,8 @@ sub readHealthStatus{
         my $reference = $HEALTH_STATUS_LIST[$index];
         $$reference = $expects[$index];
     }
-    if($HS_PGUSER eq "" || $HS_M_PGDD eq "" || $HS_M_HSNM eq "" || $HS_M_PORT eq ""){
-        logMessage("WARN","Can not get normal information from status files.");
+    if($HS_PGUSER eq "" || $HS_M_PGDD eq "" || $HS_M_HSNM eq "" || $HS_M_PORT eq "" || @HOST_CONTENT_LIST < 1){
+        logMessage("WARN","Can not get normal information from status files.\nYou should make sure that the cluster is normal before the first time run the command.");
         exitMain(1);
     }
     closeHealthStatusFile();
