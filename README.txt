@@ -30,7 +30,7 @@ gpdbtransfer
 [gpadmin@mdw bin]$ chmod 755 gpdbtransfer  
 使用说明可以参考命令的help信息或readme目录中查看  
 
-gpdbcluster命令暂未经过大规模验证--正在写一个新的脚本、重新构思和实现、将会更健壮    
+gpdbcluster命令目前已经经过全面重构、逻辑上更加清晰和严谨、欢迎试用    
 #建议慎重用于生产环境    
 #目前已经强化了Standby激活的逻辑，如果无法判断Master的状态就不切换，    
 #因为，如果gpactivatestandby命令本身也无法判断Master状态的话，    
