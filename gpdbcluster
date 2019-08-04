@@ -323,6 +323,10 @@ sub readHealthStatus{
         my $reference = $HEALTH_STATUS_LIST[$index];
         $$reference = $expects[$index];
     }
+    if($HS_PGUSER eq "" || $HS_M_PGDD eq "" || $HS_M_HSNM eq "" || $HS_M_PORT eq ""){
+        logMessage("WARN","Can not get normal information from status files.");
+        exitMain(1);
+    }
     closeHealthStatusFile();
 }
 sub writeHealthStatus{
