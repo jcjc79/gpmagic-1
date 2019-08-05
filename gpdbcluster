@@ -227,6 +227,10 @@ sub checkOption{
     if($OPR_START + $OPR_STOP + $OPR_STATUS > 1){
         errorMessage("Can't specify --start or --stop or --status at the same time");
     }
+    my ($code,$output) = executeCommand(qq(id $HS_PGUSER 2>&1));
+    if($code != 0){
+        errorMessage("No such user: $HS_PGUSER");
+    }
 }
 sub queryResult{
     my ($query_sql) = @_;
@@ -781,6 +785,10 @@ sub stopProcess{
         return;
     }
     readHealthStatus();
+    my ($m_code,$m_procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
+    if($m_procpid eq ""){
+        errorMessage("No process running currently");
+    }
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         stopResource($HS_S_HSNM);
         my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|awk '{print \$1}'));
@@ -789,12 +797,9 @@ sub stopProcess{
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
         }
     }
-    my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
-    if($procpid ne ""){
-        logMessage("INFO","Stop process on master: $procpid");
-        executeCommand(qq{sudo kill -9 $procpid});
-    }else{
-        errorMessage("No process execute currently");
+    if($m_procpid ne ""){
+        logMessage("INFO","Stop process on master: $m_procpid");
+        executeCommand(qq{sudo kill -9 $m_procpid});
     }
     exitMain(0);
 }
