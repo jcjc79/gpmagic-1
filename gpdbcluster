@@ -328,7 +328,7 @@ sub readHealthStatus{
         $$reference = $expects[$index];
     }
     if($HS_PGUSER eq "" || $HS_M_PGDD eq "" || $HS_M_HSNM eq "" || $HS_M_PORT eq "" || @HOST_CONTENT_LIST < 1){
-        logMessage("WARN","Can not get normal information from status files.\nYou should make sure that the cluster is normal before the first time run the command.");
+        logMessage("WARN","Can not get normal information from status files.\nYou should make sure that the cluster is normal before the first time run this command.");
         exitMain(1);
     }
     closeHealthStatusFile();
@@ -449,6 +449,7 @@ sub getMasterStatus{
     return ($code,$output);
 }
 sub getStandbyStatus{
+    logMessage("INFO","Check standby status");
     if($HS_M_STAT eq $MASTER_STATUS_ERROR){
         logMessage("WARN","Master status is not ok, can not get standby status");
         return;
@@ -457,34 +458,49 @@ sub getStandbyStatus{
 (SELECT fselocation FROM pg_filespace_entry WHERE fsefsoid = 3052 AND fsedbid = (SELECT dbid FROM gp_segment_configuration WHERE content = -1 AND role = 'm')),
 max(hostname),max(port)
 FROM gp_segment_configuration WHERE content = -1 AND role = 'm';});
+    my ($pgdd,$hsnm,$port);
+    if($code1 == 0){
+        ($pgdd,$hsnm,$port) = @{$result_set1->[0]};
+    }else{
+        logMessage("WARN","Get standby configuration from master occur error");
+        return $FALSE;
+    }
+    if($pgdd eq "" || $hsnm eq "" || $port eq ""){
+        $HS_S_STAT = $STANDBY_STATUS_UNCONFIGUED;
+        logMessage("INFO","Standby is unconfigured");
+        return $HS_S_STAT;
+    }
     my ($code2,$scalar2) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstate -f|grep 'Sync state: sync'|wc -l" 2>&1});
-    if($code1 == 0 && $code2 == 0){
-        ($HS_S_PGDD,$HS_S_HSNM,$HS_S_PORT) = @{$result_set1->[0]};
+    if($code2 == 0){
+        ($HS_S_PGDD,$HS_S_HSNM,$HS_S_PORT) = ($pgdd,$hsnm,$port);
         if($scalar2 eq "1"){
             $HS_S_STAT = $STANDBY_STATUS_OK;
-        }elsif($HS_S_HSNM eq ""){
-            $HS_S_STAT = $STANDBY_STATUS_UNCONFIGUED;
         }else{
             $HS_S_STAT = $STANDBY_STATUS_ERROR;
         }
+        logMessage("INFO","Standby status: $HS_S_STAT");
         return $HS_S_STAT;
     }else{
+        logMessage("WARN","Get standby configuration from master occur error");
         return $FALSE;
     }
 }
 sub checkStandbyProcess{
     logMessage("INFO","Check standby process information");
     if($HS_S_STAT eq $STANDBY_STATUS_UNCONFIGUED){
+        logMessage("INFO","Standby is unconfigured");
         return;
     }
     my ($code,$procpid) = executeCommand(qq{ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}'));
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
             $FIRST_CHECK_STANDBY_PROCESS = $FALSE;
+            logMessage("INFO","Standby exists residual process");
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
             $procpid = "";
         }
         if($HS_S_STAT eq $STANDBY_STATUS_OK && $procpid eq ""){
+            logMessage("INFO","Standby process not exists, overwrite command file and start command process");
             executeCommand(qq{scp $CMD_PATH/$CMD_NAME $HS_S_HSNM:/tmp/$CMD_NAME 2>&1});
             executeCommand(qq{ssh $HS_S_HSNM -T "umask 0022;sudo chmod 755 /tmp/$CMD_NAME" 2>&1});
             my $start = qq{ssh $HS_S_HSNM -T "nohup /tmp/$CMD_NAME -u $HS_PGUSER --md $HS_M_PGDD --mh $HS_M_HSNM --mp $HS_M_PORT};
@@ -492,6 +508,7 @@ sub checkStandbyProcess{
             $start = $start.qq{ --resource '$HS_REOURCE'}.($HS_ENABLE_RECOVER ? " --recover" : "").($HS_ENABLE_REBALANCE ? " --rebalance" : "").qq{ > /dev/null 2>&1 &"};
             executeCommand($start);
         }elsif($HS_S_STAT ne $STANDBY_STATUS_OK && $procpid ne ""){
+            logMessage("INFO","Standby status is not good, kill monitor process");
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
         }
     }
