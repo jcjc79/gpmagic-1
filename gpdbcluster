@@ -158,7 +158,7 @@ sub logMessage{
         my $log_file = $log_path."/".$CMD_NAME."_".$LOG_FILE_DATE.".log";
         open($LOG_FILE_HANDLE,">>",$log_file);
         if($OPR_STATUS eq ""){
-            printMessage("INFO","Current log file is:".$log_file);
+            printMessage("INFO","Current log file is: ".$log_file);
         }
     }
     print $LOG_FILE_HANDLE $log_message;
@@ -356,7 +356,7 @@ sub writeHealthStatus{
     closeHealthStatusFile();
 }
 sub checkMasterOrStandby{
-    my ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'
+    my ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 if [ -e "\$MASTER_DATA_DIRECTORY" ];then pg_controldata \$MASTER_DATA_DIRECTORY |grep 'Database cluster state'|awk -F ':' '{print \$NF}';else exit 1;fi
 END_OF_COMMAND));
     if($code == 0){
@@ -396,7 +396,7 @@ sub checkSegmentHostUp{
         if($allup eq $FALSE && $status eq "d"){
             next;
         }
-        my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SSH_TEST_TIMEOUT sudo -iu $HS_PGUSER ssh $hostname -T "date"});
+        my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SSH_TEST_TIMEOUT sudo -iu $HS_PGUSER ssh $hostname -T "date" 2>&1});
         if($code != 0){
             return $FALSE;
         }
@@ -494,11 +494,11 @@ sub checkStandbyProcess{
     my ($code,$procpid) = executeCommand(qq{ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}'));
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
-            $FIRST_CHECK_STANDBY_PROCESS = $FALSE;
             logMessage("INFO","Standby exists residual process");
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
             $procpid = "";
         }
+        $FIRST_CHECK_STANDBY_PROCESS = $FALSE;
         if($HS_S_STAT eq $STANDBY_STATUS_OK && $procpid eq ""){
             logMessage("INFO","Standby process not exists, overwrite command file and start command process");
             executeCommand(qq{scp $CMD_PATH/$CMD_NAME $HS_S_HSNM:/tmp/$CMD_NAME 2>&1});
@@ -510,7 +510,13 @@ sub checkStandbyProcess{
         }elsif($HS_S_STAT ne $STANDBY_STATUS_OK && $procpid ne ""){
             logMessage("INFO","Standby status is not good, kill monitor process");
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
+        }elsif($HS_S_STAT eq $STANDBY_STATUS_OK && $procpid ne ""){
+            logMessage("INFO","Standby monitor procpid: $procpid");
+        }else{
+            logMessage("INFO","Standby status: $HS_S_STAT");
         }
+    }else{
+        logMessage("WARN","Check standby process occur error");
     }
 }
 sub updateHealthStatus{
@@ -594,7 +600,7 @@ sub executeSegmentRecover{
         logMessage("WARN","Not all segment host is up");
         return $FALSE;
     }
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 gprecoverseg -a
 END_OF_COMMAND});
     if($code == 0){
@@ -607,7 +613,7 @@ sub executeSegmentRebalance{
     if($HS_ENABLE_REBALANCE eq undef){
         return $TRUE;
     }
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 gprecoverseg -a -r
 END_OF_COMMAND});
     if($code == 0){
@@ -617,7 +623,7 @@ END_OF_COMMAND});
     }
 }
 sub stopMaster{
-    my ($code,$output) = executeCommand(qq{ping $HS_M_HSNM -c 1 -w 1});
+    my ($code,$output) = executeCommand(qq{ping $HS_M_HSNM -c 1 -w 1 2>&1});
     if($code == 0){
         logMessage("INFO","Remote master is still alive, try to stop master");
         ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstop -amf 2>&1"});
@@ -634,7 +640,7 @@ sub stopMaster{
         logMessage("WARN","Failed to ping remote Master Host, Try again from other segment hosts");
         for my $row(@HOST_CONTENT_LIST){
             my ($hostname,$status,$contents) = @$row;
-            ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $hostname -T "ping $HS_M_HSNM -c 1 -w 1"});
+            ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $hostname -T "ping $HS_M_HSNM -c 1 -w 1" 2>&1});
             if($code == 0){
                 logMessage("WARN","Some segment host always can ping to master: $hostname");
                 return $FALSE;
@@ -648,7 +654,7 @@ sub resyncStandby{
         return;
     }
     logMessage("INFO","Try to resync standby");
-    executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n"});
+    executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n" 2>&1});
 }
 sub startMasterListener{
     while($TRUE){
@@ -697,11 +703,7 @@ sub switchMasterAndStandby{
     return $status;
 }
 sub activeStandby{
-    my $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a -d $HS_S_PGDD"};
-    if($HS_S_PGDD eq ""){
-        logMessage("WARN","--master-data-directory unknown, activate standby maybe failed");
-        $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a"};
-    }
+    my $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a -d $HS_S_PGDD 2>&1"};
     my ($code,$output) = executeCommand($command);
     if($code != 0){
         logMessage("WARN","Active standby occur error:\n".$output);
@@ -737,7 +739,7 @@ sub bindLocalVirtualIp{
     }
     my ($vip,$vmask,$vdev) = split(/:/,$HS_V_IP);
     logMessage("INFO","Try to add virtual ipaddress: ip addr add $vip/$vmask dev $vdev");
-    executeCommand(qq{sudo ip addr add $vip/$vmask dev $vdev});
+    executeCommand(qq{sudo ip addr add $vip/$vmask dev $vdev 2>&1});
 }
 sub unbindLocalVirtualIp{
     if($HS_V_IP eq ""){
@@ -748,7 +750,7 @@ sub unbindLocalVirtualIp{
     if($output ne ""){
         my ($curr_ip,$curr_mask,$curr_dev) = split(/:/,$output);
         logMessage("INFO","Try to delete virtual ipaddress: ip addr del $curr_ip/$curr_mask dev $curr_dev");
-        executeCommand(qq{sudo ip addr del $curr_ip/$curr_mask dev $curr_dev});
+        executeCommand(qq{sudo ip addr del $curr_ip/$curr_mask dev $curr_dev 2>&1});
     }
 }
 sub startResource{
@@ -756,7 +758,7 @@ sub startResource{
     if($OPR_START || $OPR_STOP || $OPR_STATUS || $HS_REOURCE eq "" || $hostname eq ""){
         return;
     }
-    my ($code,$output) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "sudo -i sh $HS_REOURCE START"});
+    my ($code,$output) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "sudo -i sh $HS_REOURCE START" 2>&1});
     if($code == 0){
         logMessage("INFO","Execute $HS_REOURCE START on $hostname success");
     }else{
@@ -768,7 +770,7 @@ sub stopResource{
     if($OPR_START || $OPR_STOP || $OPR_STATUS || $HS_REOURCE eq "" || $hostname eq ""){
         return;
     }
-    my ($code,$output) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "sudo -i sh $HS_REOURCE STOP"});
+    my ($code,$output) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "sudo -i sh $HS_REOURCE STOP" 2>&1});
     if($code == 0){
         logMessage("INFO","Execute $HS_REOURCE STOP on $hostname success");
     }else{
@@ -811,12 +813,12 @@ sub stopProcess{
         my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             logMessage("INFO","Stop process on standby: $procpid");
-            executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
+            executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid" 2>&1});
         }
     }
     if($m_procpid ne ""){
         logMessage("INFO","Stop process on master: $m_procpid");
-        executeCommand(qq{sudo kill -9 $m_procpid});
+        executeCommand(qq{sudo kill -9 $m_procpid 2>&1});
     }
     exitMain(0);
 }
@@ -875,7 +877,7 @@ sub main{
     getOption();
     checkOption();
     logMessage("INFO","Run command: ".$_[0]);
-    my ($code,$output) = executeCommand("timeout -s 9 1 sudo date");
+    my ($code,$output) = executeCommand("timeout -s 9 1 sudo date 2>&1");
     if($code != 0){
         errorMessage("You must run this command use user which can sudo without password");
     }
