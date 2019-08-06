@@ -470,7 +470,7 @@ FROM gp_segment_configuration WHERE content = -1 AND role = 'm';});
         logMessage("INFO","Standby is unconfigured");
         return $HS_S_STAT;
     }
-    my ($code2,$scalar2) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstate -f|grep 'Sync state: sync'|wc -l" 2>&1});
+    my ($code2,$scalar2) = executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstate -f|grep 'Sync state: sync'|wc -l" 2>&1});
     if($code2 == 0){
         ($HS_S_PGDD,$HS_S_HSNM,$HS_S_PORT) = ($pgdd,$hsnm,$port);
         if($scalar2 eq "1"){
@@ -581,7 +581,7 @@ sub getClusterSegmentStatus{
     }
     my ($code,$scalar,$result_set) = queryResult(qq{SELECT
     count(*) FILTER (WHERE status = 'd'),
-    count(*) FILTER (WHERE status = 'r'),
+    count(*) FILTER (WHERE mode = 'r'),
     count(*) FILTER (WHERE preferred_role <> role)
 FROM gp_segment_configuration WHERE content >= 0;});
     if($code == 0){
@@ -600,7 +600,8 @@ sub executeSegmentRecover{
         logMessage("WARN","Not all segment host is up");
         return $FALSE;
     }
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
+    logMessage("INFO","Execute command: gprecoverseg -a");
+    my ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 gprecoverseg -a
 END_OF_COMMAND});
     if($code == 0){
@@ -613,7 +614,8 @@ sub executeSegmentRebalance{
     if($HS_ENABLE_REBALANCE eq undef){
         return $TRUE;
     }
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
+    logMessage("INFO","Execute command: gprecoverseg -a -r");
+    my ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 gprecoverseg -a -r
 END_OF_COMMAND});
     if($code == 0){
@@ -626,7 +628,7 @@ sub stopMaster{
     my ($code,$output) = executeCommand(qq{ping $HS_M_HSNM -c 1 -w 1 2>&1});
     if($code == 0){
         logMessage("INFO","Remote master is still alive, try to stop master");
-        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstop -amf 2>&1"});
+        ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstop -amf 2>&1"});
         if($code != 0){
             logMessage("WARN","Try to stop master occur error:\n".$output);
         }
@@ -856,7 +858,7 @@ sub getStatus{
     logMessage("INFO","  Standby Hostname      : $HS_S_HSNM");
     logMessage("INFO","  Standby Database Port : $HS_S_PORT");
     logMessage("INFO","  Standby Status        : $HS_S_STAT");
-    logMessage("INFO","  Virtual IP Adress     : ".($HS_V_IP eq "" ? "Unconfiged" : $HS_V_IP));
+    logMessage("INFO","  Virtual IP Address    : ".($HS_V_IP eq "" ? "Unconfiged" : $HS_V_IP));
     logMessage("INFO","  Resource              : ".($HS_REOURCE eq "" ? "Unconfiged" : $HS_REOURCE));
     logMessage("INFO","  Enable recovery       : ".($HS_ENABLE_RECOVER eq "" ? "FALSE" : "TRUE"));
     logMessage("INFO","  Enable rebalance      : ".($HS_ENABLE_REBALANCE eq "" ? "FALSE" : "TRUE"));
@@ -880,7 +882,7 @@ sub main{
     getOption();
     checkOption();
     logMessage("INFO","Run command: ".$_[0]);
-    my ($code,$output) = executeCommand("timeout -s 9 1 sudo date 2>&1");
+    my ($code,$output) = executeCommand("sudo date 2>&1");
     if($code != 0){
         errorMessage("You must run this command use user which can sudo without password");
     }
