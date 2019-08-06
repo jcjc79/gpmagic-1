@@ -550,7 +550,7 @@ sub outputRoleSetting{
         $alter = $alter.($inherit eq "t" ? " INHERIT" : " NOINHERIT");
         $alter = $alter.($createrole eq "t" ? " CREATEROLE" : " NOCREATEROLE");
         $alter = $alter.($createdb eq "t" ? " CREATEDB" : " NOCREATEDB");
-        $alter = $alter.($canlogin eq "t" ? " LOGIN" : " LOGIN");
+        $alter = $alter.($canlogin eq "t" ? " LOGIN" : " NOLOGIN");
         $alter = $alter.qq{ CONNECTION LIMIT $connlimit};
         $alter = $alter.qq{ PASSWORD '$password'};
         $alter = $alter.("" ne $validuntil ? " VALID UNTIL '$validuntil" : "");
