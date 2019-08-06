@@ -655,7 +655,7 @@ sub resyncStandby{
     if($HS_S_STAT eq $STANDBY_STATUS_UNCONFIGUED){
         return;
     }
-    logMessage("INFO","Try to resync standby");
+    logMessage("INFO","Execute command: gpinitstandby -a -n");
     executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n" 2>&1});
 }
 sub startMasterListener{
