@@ -23,7 +23,7 @@ my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARR
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
-        "default_statistics_target"                   => "-v 15 -m 15"
+        "default_statistics_target"                   => "-v 15 -m 15",
         "max_appendonly_tables"                       => "-v 50000 -m 50000",
         "gp_max_partition_level"                      => "-v 1 -m 1",
         "log_min_duration_statement"                  => "-v 30000 -m 30000",
@@ -978,24 +978,27 @@ sub initGpSystem{
         return;
     }
     my @init_config = ();
-    push @init_config,qq{ARRAY_NAME="Pivotal Greenplum DW"};
-    push @init_config,qq{SEG_PREFIX=$PREFIX};
-    push @init_config,qq{PORT_BASE=$PORT_BASE};
-    my $data_directory = "declare -a DATA_DIRECTORY=(";
-    for my $path(@SEGMENT_DEV){
-        for my $idx(1 .. $SEGS_PER_DISK){
-            $data_directory = $data_directory."$path/primary/default ";
-        }
-    }
     my ($m_ip,$m_hostname) = @MASTER_CONFIG;
-    $data_directory = trim($data_directory).")";
-    push @init_config,$data_directory;
-    push @init_config,qq{MASTER_HOSTNAME=$m_hostname};
-    push @init_config,qq{MASTER_DIRECTORY=$MASTER_DEV/master/default};
-    push @init_config,qq{MASTER_PORT=$MASTER_PORT};
+    push @init_config,qq{ARRAY_NAME="Pivotal Greenplum DW"};
     push @init_config,qq{TRUSTED_SHELL=ssh};
     push @init_config,qq{CHECK_POINT_SEGMENTS=8};
     push @init_config,qq{ENCODING=UNICODE};
+    push @init_config,qq{SEG_PREFIX=$PREFIX};
+    push @init_config,qq{HEAP_CHECKSUM=on};
+    push @init_config,qq{QD_PRIMARY_ARRAY=$m_hostname~$MASTER_PORT~/$MASTER_DEV/master/default/$PREFIX-1~1~-1~0};
+    push @init_config,qq{declare -a PRIMARY_ARRAY=(};
+    my ($content_index,$dbid_index) = (0,2);
+    for my $config(sort {$a->[1] <=> $b->[1]} @SEG_INSTALL_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
+        my $port_index = $PORT_BASE;
+        for my $path(@SEGMENT_DEV){
+            for my $idx(1 .. $SEGS_PER_DISK){
+                push @init_config,qq{$hostname~$port_index~$path/primary/default/$PREFIX}.$content_index.qq{~}.$dbid_index.qq{~}.$content_index.qq{~0};
+                ($content_index,$dbid_index,$port_index) = ($content_index + 1,$dbid_index + 1,$port_index + 1);
+            }
+        }
+    }
+    push @init_config,qq{)};
     system(qq{sudo mkdir -p $WORK_PATH/gpdbinstall;sudo touch $WORK_PATH/gpdbinstall/gpinitsystem_config;sudo chmod -R 777 $WORK_PATH/gpdbinstall});
     open(my $init_handle,">","$WORK_PATH/gpdbinstall/gpinitsystem_config");
     for my $line(@init_config){
@@ -1003,7 +1006,7 @@ sub initGpSystem{
     }
     close $init_handle;
     system(qq{sudo su - $GP_ADMIN_NAME -c "rm -f gpAdminLogs/gpinitsystem_*.log"});
-    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -c $WORK_PATH/gpdbinstall/gpinitsystem_config -h $WORK_PATH/all_segs_install"};
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -I $WORK_PATH/gpdbinstall/gpinitsystem_config"};
     logMessage("INFO","Execute command:\n".$command);
     system($command);
     my $exit_code = $? >> 8;
@@ -1503,10 +1506,13 @@ elif [ $IS_SuSE == 1 ];then
     service ssh reload                                                            > /dev/null 2>&1
 fi
 ##################################################################################
-groupadd -r -g $USID $USNM                                                        > /dev/null 2>&1
-useradd -r -m -g $USNM -u $USID $USNM                                             > /dev/null 2>&1
+id $USNM                                                                          > /dev/null 2>&1
 exitcode=$?
-echo $PSWD|base64 -d|passwd --stdin $USNM                                         > /dev/null 2>&1
+if [ $exitcode != 0 ];then
+    groupadd -r -g $USID $USNM                                                    > /dev/null 2>&1
+    useradd -r -m -g $USNM -u $USID $USNM                                         > /dev/null 2>&1
+    echo $PSWD|base64 -d|passwd --stdin $USNM                                     > /dev/null 2>&1
+fi
 id $USNM                                                                          > /dev/null 2>&1
 exitcode=$?
 if [ $exitcode != 0 ];then
