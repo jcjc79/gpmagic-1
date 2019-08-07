@@ -571,6 +571,7 @@ sub getClusterSegmentStatus{
     if($HS_ENABLE_RECOVER eq undef){
         return ($TRUE,0,0,0,"");
     }
+    queryResult(qq{CHECKPOINT;});
     my ($code,$scalar,$result_set) = queryResult(qq{SELECT
     count(*) FILTER (WHERE status = 'd'),
     count(*) FILTER (WHERE mode = 'r'),
@@ -608,6 +609,7 @@ sub executeSegmentRecover{
 gprecoverseg -a
 END_OF_COMMAND});
     if($code == 0){
+        logMessage("INFO","Success execute command: gprecoverseg -a");
         return $TRUE;
     }else{
         return $FALSE;
@@ -631,6 +633,7 @@ sub executeSegmentRebalance{
 gprecoverseg -a -r
 END_OF_COMMAND});
     if($code == 0){
+        logMessage("INFO","Success execute command: gprecoverseg -a -r");
         return $TRUE;
     }else{
         return $FALSE;
