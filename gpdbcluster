@@ -22,10 +22,9 @@ my @HEALTH_STATUS_LIST = (\$HS_PID,\$HS_PGUSER,\$HS_M_PGDD,\$HS_M_HSNM,\$HS_M_PO
     \$HS_ENABLE_RECOVER,\$HS_ENABLE_REBALANCE,\$MAX_CONTENT);
 my $HOSTS_SPLIT = 'HOSTS-'.chr(0).'-SPLIT';
 my @HOST_CONTENT_LIST;
-my ($HEALTH_CHECK_FILE_SLEEP) = (10);
 my ($CURRENT_HOSTNAME);
+my ($INSTANCE_CHECKSUM,$RECOVER_TIMES,$REBALANCE_TIMES,$RESYNC_STANDBY_TIMES) = (undef,0,0,0);
 
-my (@SEGMENT_HOSTS_ARRAY);
 my ($OPR_START,$OPR_STOP,$OPR_STATUS,$START_ROLE,$IS_HELP,$VERSION);
 
 my ($LOG_FILE_DATE,$LOG_FILE_HANDLE,$HEALTH_STATUS_FILE_HANDLE,$HEALTH_CHECK_FILE_HANDLE);
@@ -454,26 +453,19 @@ sub getStandbyStatus{
         logMessage("WARN","Master status is not ok, can not get standby status");
         return;
     }
-    my ($code1,$scalar1,$result_set1) = queryResult(qq{SELECT
+    my ($code,$scalar,$result_set) = queryResult(qq{SELECT
 (SELECT fselocation FROM pg_filespace_entry WHERE fsefsoid = 3052 AND fsedbid = (SELECT dbid FROM gp_segment_configuration WHERE content = -1 AND role = 'm')),
+(SELECT sync_state FROM pg_stat_replication),
 max(hostname),max(port)
 FROM gp_segment_configuration WHERE content = -1 AND role = 'm';});
-    my ($pgdd,$hsnm,$port);
-    if($code1 == 0){
-        ($pgdd,$hsnm,$port) = @{$result_set1->[0]};
-    }else{
-        logMessage("WARN","Get standby configuration from master occur error");
-        return $FALSE;
-    }
-    if($pgdd eq "" || $hsnm eq "" || $port eq ""){
-        $HS_S_STAT = $STANDBY_STATUS_UNCONFIGUED;
-        logMessage("INFO","Standby is unconfigured");
-        return $HS_S_STAT;
-    }
-    my ($code2,$scalar2) = executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstate -f|grep 'Sync state: sync'|wc -l" 2>&1});
-    if($code2 == 0){
-        ($HS_S_PGDD,$HS_S_HSNM,$HS_S_PORT) = ($pgdd,$hsnm,$port);
-        if($scalar2 eq "1"){
+    if($code == 0){
+        my ($pgdd,$sync,$hsnm,$port) = @{$result_set->[0]};
+        if($pgdd eq "" || $hsnm eq "" || $port eq ""){
+            $HS_S_STAT = $STANDBY_STATUS_UNCONFIGUED;
+            logMessage("INFO","Standby is unconfigured");
+            return $HS_S_STAT;
+        }
+        if($sync eq "sync"){
             $HS_S_STAT = $STANDBY_STATUS_OK;
         }else{
             $HS_S_STAT = $STANDBY_STATUS_ERROR;
@@ -577,27 +569,38 @@ sub firstCheckMasterStatus{
 }
 sub getClusterSegmentStatus{
     if($HS_ENABLE_RECOVER eq undef){
-        return ($TRUE,0,0,0);
+        return ($TRUE,0,0,0,"");
     }
     my ($code,$scalar,$result_set) = queryResult(qq{SELECT
     count(*) FILTER (WHERE status = 'd'),
     count(*) FILTER (WHERE mode = 'r'),
-    count(*) FILTER (WHERE preferred_role <> role)
+    count(*) FILTER (WHERE preferred_role <> role),
+    md5(string_agg(dbid||status||'|'||mode||'|'||preferred_role||'|'||role,',' ORDER BY dbid ASC))
 FROM gp_segment_configuration WHERE content >= 0;});
     if($code == 0){
-        my ($down,$resync,$failover) = @{$result_set->[0]};
-        return ($TRUE,$down,$resync,$failover);
+        my ($down,$resync,$failover,$checksum) = @{$result_set->[0]};
+        return ($TRUE,$down,$resync,$failover,$checksum);
     }else{
-        return ($FALSE,0,0,0);
+        return ($FALSE,0,0,0,"");
     }
 }
 sub executeSegmentRecover{
+    my ($checksum) = @_;
     if($HS_ENABLE_RECOVER eq undef){
         return $TRUE;
     }
     my $status = checkSegmentHostUp($TRUE);
     if($status eq $FALSE){
         logMessage("WARN","Not all segment host is up");
+        return $FALSE;
+    }
+    if($INSTANCE_CHECKSUM eq $checksum){
+        $RECOVER_TIMES += 1;
+    }else{
+        ($INSTANCE_CHECKSUM,$RECOVER_TIMES) = ($checksum,0);
+    }
+    if($RECOVER_TIMES >= $HEALTH_CHECK_TIMES){
+        logMessage("WARN","Have try many times to execute recover");
         return $FALSE;
     }
     logMessage("INFO","Execute command: gprecoverseg -a");
@@ -611,8 +614,17 @@ END_OF_COMMAND});
     }
 }
 sub executeSegmentRebalance{
+    my ($checksum) = @_;
     if($HS_ENABLE_REBALANCE eq undef){
         return $TRUE;
+    }
+    if($INSTANCE_CHECKSUM eq $checksum){
+        $REBALANCE_TIMES += 1;
+    }else{
+        ($INSTANCE_CHECKSUM,$REBALANCE_TIMES) = ($checksum,0);
+    }
+    if($REBALANCE_TIMES >= $HEALTH_CHECK_TIMES){
+        logMessage("WARN","Have try many times to execute rebalance");
     }
     logMessage("INFO","Execute command: gprecoverseg -a -r");
     my ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
@@ -655,8 +667,13 @@ sub resyncStandby{
     if($HS_S_STAT eq $STANDBY_STATUS_UNCONFIGUED){
         return;
     }
-    logMessage("INFO","Execute command: gpinitstandby -a -n");
-    executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n" 2>&1});
+    if($RESYNC_STANDBY_TIMES < $HEALTH_CHECK_TIMES){
+        $RESYNC_STANDBY_TIMES += 1;
+        logMessage("INFO","Execute command: gpinitstandby -a -n");
+        executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n" 2>&1});
+    }else{
+        logMessage("WARN","Have try many times to execute resync standby");
+    }
 }
 sub startMasterListener{
     while($TRUE){
@@ -667,6 +684,8 @@ sub startMasterListener{
             my $status = getStandbyStatus();
             if($status eq $STANDBY_STATUS_ERROR){
                 resyncStandby();
+            }else{
+                $RESYNC_STANDBY_TIMES = 0;
             }
             checkStandbyProcess();
             updateHealthStatus();
@@ -682,14 +701,18 @@ sub startMasterListener{
             updateHealthStatus();
         }
         if($code == 0){
-            my ($status,$down,$resync,$failover) = getClusterSegmentStatus();
+            my ($status,$down,$resync,$failover,$checksum) = getClusterSegmentStatus();
             if($status eq $FALSE){
                 logMessage("WARN","Get cluster segment status occur error");
             }else{
                 if($down != 0 && $resync == 0){
-                    executeSegmentRecover();
+                    executeSegmentRecover($checksum);
                 }elsif($down == 0 && $resync == 0 && $failover != 0){
-                    executeSegmentRebalance();
+                    executeSegmentRebalance($checksum);
+                }elsif($down != 0 && $resync != 0){
+                    logMessage("WARN","Can not solve the problem as have instance down when have instance resync");
+                }else{
+                    ($INSTANCE_CHECKSUM,$RECOVER_TIMES,$REBALANCE_TIMES) = ($checksum,0,0);
                 }
             }
         }
