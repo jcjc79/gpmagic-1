@@ -9,8 +9,8 @@ my ($TRUE,$FALSE) = ("True",undef);
 my ($MASTER_STATUS_OK,$MASTER_STATUS_ERROR) = ("Normal","Error");
 my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN,$ROLE_CHECK_SLEEP) = ("Unknown","Master","Standby","Unknown",60);
 my ($STANDBY_STATUS_OK,$STANDBY_STATUS_ERROR,$STANDBY_STATUS_UNCONFIGUED) = ("Synchronized","UnSynchronized","Unconfiged");
-my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (50,30,300,10);
-my ($HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$REGAIN_CLUSTER_SLEEP) = (4,1,30);
+my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (60,29,300,20);
+my ($HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP) = (4,1,20);
 my ($HEALTH_STATUS_FILE,$HEALTH_CHECK_FILE) = ($ENV{"HOME"}."/.gpdbcluster.health.status",$ENV{"HOME"}."/.gpdbcluster.health.check");
 my ($SQL_DELIM,$RECORD_SPLIT) = (chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my ($FIRST_CHECK_STANDBY_PROCESS) = ($TRUE);
@@ -411,7 +411,7 @@ sub startCluster{
         }else{
             last;
         }
-        sleep($REGAIN_CLUSTER_SLEEP);
+        sleep($START_CLUSTER_SLEEP);
     }
     logMessage("INFO","Try to start cluster normally...");
     my ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpstart -a" 2>&1});
@@ -442,7 +442,6 @@ sub getMasterStatus{
             return ($code,$output);
         }elsif($trys < $try_to){
             logMessage("NOTICE","Check master status occur error, will try again");
-            sleep($HEALTH_CHECK_SLEEP);
         }
     }
     return ($code,$output);
@@ -455,7 +454,7 @@ sub getStandbyStatus{
     }
     my ($code,$scalar,$result_set) = queryResult(qq{SELECT
 (SELECT fselocation FROM pg_filespace_entry WHERE fsefsoid = 3052 AND fsedbid = (SELECT dbid FROM gp_segment_configuration WHERE content = -1 AND role = 'm')),
-(SELECT sync_state FROM pg_stat_replication),
+(SELECT sync_state FROM pg_stat_get_wal_senders() AS w(pid, state, sent_location, write_location, flush_location, replay_location, sync_priority, sync_state)),
 max(hostname),max(port)
 FROM gp_segment_configuration WHERE content = -1 AND role = 'm';});
     if($code == 0){
@@ -821,7 +820,7 @@ sub startProcess{
     $start = $start.qq{ --sd $HS_S_PGDD --sh $HS_S_HSNM --sp $HS_S_PORT --vip '$HS_V_IP'}." --start-role Master";
     $start = $start.qq{ --resource '$HS_REOURCE'}.($HS_ENABLE_RECOVER ? " --recover" : "").($HS_ENABLE_REBALANCE ? " --rebalance" : "").qq{ > /dev/null 2>&1 &};
     executeCommand($start);
-    sleep(1);
+    sleep($HEALTH_CHECK_SLEEP);
     ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($procpid ne ""){
         logMessage("INFO","Start process success with process id: $procpid");
