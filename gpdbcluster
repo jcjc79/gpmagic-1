@@ -9,7 +9,7 @@ my ($TRUE,$FALSE) = ("True",undef);
 my ($MASTER_STATUS_OK,$MASTER_STATUS_ERROR) = ("Normal","Error");
 my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN,$ROLE_CHECK_SLEEP) = ("Unknown","Master","Standby","Unknown",60);
 my ($STANDBY_STATUS_OK,$STANDBY_STATUS_ERROR,$STANDBY_STATUS_UNCONFIGUED) = ("Synchronized","UnSynchronized","Unconfiged");
-my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (60,29,300,20);
+my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (10,29,60,20);
 my ($HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP) = (4,1,20);
 my ($HEALTH_STATUS_FILE,$HEALTH_CHECK_FILE) = ($ENV{"HOME"}."/.gpdbcluster.health.status",$ENV{"HOME"}."/.gpdbcluster.health.check");
 my ($SQL_DELIM,$RECORD_SPLIT) = (chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
@@ -174,7 +174,7 @@ sub executeCommand{
     my $exit_code = $? >> 8;
     $output = trim($output);
     if($exit_code != 0){
-        logMessage("WARN","Execute command:\n".$command."\nOccur error:\n".$output);
+        logMessage("WARN","Execute command:\n".$command." Occur error".($output eq "" ? "" : "\n".$output));
     }
     return ($exit_code,$output);
 }
@@ -233,7 +233,7 @@ sub checkOption{
 }
 sub queryResult{
     my ($query_sql) = @_;
-    my $CMDS = "sudo sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'\n";
+    my $CMDS = "sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'\n";
     $CMDS = $CMDS."PGOPTIONS='-c client_encoding=UTF8' PGHOST='$HS_M_HSNM' PGDATABASE='template1' PGPORT=$HS_M_PORT PGUSER='$HS_PGUSER' ";
     local $/ = $RECORD_SPLIT;
     $CMDS = $CMDS."psql -R '$/' -qtAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
@@ -428,12 +428,14 @@ sub getMasterStatus{
         $try_to = $try_from;
     }
     my $check_sql = qq{select pg_sleep($SQL_SLEEP);};
+    my $timeout = $SQL_TIMEOUT + $SQL_SLEEP;
     my ($output,$code);
     for my $trys($try_from .. $try_to){
         if($TRUE eq $once || $trys > $try_from){
             $check_sql = qq{select 1;};
+            $timeout = $SQL_TIMEOUT;
         }
-        ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh -c "psql -qtAX -h $HS_M_HSNM -p $HS_M_PORT template1 -c '$check_sql'" 2>&1});
+        ($code,$output) = executeCommand(qq{sudo timeout -s 9 $timeout sudo -iu $HS_PGUSER sh -c "psql -qtAX -h $HS_M_HSNM -p $HS_M_PORT template1 -c '$check_sql'" 2>&1});
         if($output =~ /FATAL:.*too many clients/ || $output =~ /FATAL:.*too many connections/){
             logMessage("WARN","Occur too many connections error, will ignore it, please check the database status");
             $code = 0;
@@ -642,13 +644,18 @@ END_OF_COMMAND});
 sub stopMaster{
     my ($code,$output) = executeCommand(qq{ping $HS_M_HSNM -c 1 -w 1 2>&1});
     if($code == 0){
-        logMessage("INFO","Remote master is still alive, try to stop master");
-        ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "gpstop -amf 2>&1"});
-        if($code != 0){
-            logMessage("WARN","Try to stop master occur error:\n".$output);
+        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T 'ps ax|grep postgres|grep -v grep|grep "M master"|wc -l' 2> /dev/null});
+        if($output eq "0"){
+            executeCommand(qq(sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock"));
+            return $TRUE;
         }
-        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T 'E=`ps ax|grep postgres|grep -v grep|grep "M master"|wc -l`;exit \$E' 2>&1});
-        if($code == 0){
+        logMessage("INFO","Master is still alive, try to stop master");
+        executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "pg_ctl stop -D $HS_M_PGDD -m immediate 2>&1"});
+        sleep 3;
+        executeCommand(qq{sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "ps ax|grep postgres|grep -v grep|grep 'M master'}.q(|awk '{print \\$1}'|xargs -i kill -9 {}"));
+        executeCommand(qq(sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock"));
+        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T 'ps ax|grep postgres|grep -v grep|grep "M master"|wc -l' 2> /dev/null});
+        if($output eq "0"){
             return $TRUE;
         }else{
             return $FALSE;
@@ -747,7 +754,7 @@ sub startStandbyListener{
             logMessage("INFO","Remote Master status OK");
         }else{
             $HS_M_STAT = $MASTER_STATUS_ERROR;
-            logMessage("WARN","Local Master status error:\n".$output);
+            logMessage("WARN","Remote Master status error:\n".$output);
         }
         if($code == 0){
             updateHealthStatus();
@@ -755,7 +762,9 @@ sub startStandbyListener{
             my $status = stopMaster();
             if($status eq $TRUE){
                 my $status = activeStandby();
-                return $status;
+                if($status eq $TRUE){
+                    return;
+                }
             }
         }
         sleep($HEALTH_CHECK_SLEEP);
@@ -939,11 +948,9 @@ sub main{
         $CURRENT_HOSTNAME = $HS_S_HSNM;
         unbindLocalVirtualIp();
         stopResource($CURRENT_HOSTNAME);
-        my $status = startStandbyListener();
-        if($status eq $TRUE){
-            startMain();
-            startMasterListener();
-        }
+        startStandbyListener();
+        startMain();
+        startMasterListener();
     }else{
     #Start Master script
         logMessage("INFO","Current host is master");
