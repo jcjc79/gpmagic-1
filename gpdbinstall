@@ -985,7 +985,7 @@ sub initGpSystem{
     push @init_config,qq{ENCODING=UNICODE};
     push @init_config,qq{SEG_PREFIX=$PREFIX};
     push @init_config,qq{HEAP_CHECKSUM=on};
-    push @init_config,qq{QD_PRIMARY_ARRAY=$m_hostname~$MASTER_PORT~/$MASTER_DEV/master/default/$PREFIX-1~1~-1~0};
+    push @init_config,qq{QD_PRIMARY_ARRAY=$m_hostname~$MASTER_PORT~$MASTER_DEV/master/default/$PREFIX-1~1~-1~0};
     push @init_config,qq{declare -a PRIMARY_ARRAY=(};
     my ($content_index,$dbid_index) = (0,2);
     for my $config(sort {$a->[1] <=> $b->[1]} @SEG_INSTALL_CONFIG_ARRAY){
