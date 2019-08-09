@@ -459,6 +459,7 @@ max(hostname),max(port)
 FROM gp_segment_configuration WHERE content = -1 AND role = 'm';});
     if($code == 0){
         my ($pgdd,$sync,$hsnm,$port) = @{$result_set->[0]};
+        ($HS_S_PGDD,$HS_S_HSNM,$HS_S_PORT) = ($pgdd,$hsnm,$port);
         if($pgdd eq "" || $hsnm eq "" || $port eq ""){
             $HS_S_STAT = $STANDBY_STATUS_UNCONFIGUED;
             logMessage("INFO","Standby is unconfigured");
