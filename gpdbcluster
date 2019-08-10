@@ -214,13 +214,13 @@ sub checkOption{
     if("" eq $HS_PGUSER){
         $HS_PGUSER = "gpadmin";
         if($OPR_STATUS eq ""){
-            logMessage("NOTICE","Not specify -u, use default($HS_PGUSER)");
+            logMessage("WARN","Not specify -u, use default($HS_PGUSER)");
         }
     }
     if("" eq $HS_M_PORT){
         $HS_M_PORT = "5432";
         if($OPR_STATUS eq ""){
-            logMessage("NOTICE","Not specify -p, use default($HS_M_PORT)");
+            logMessage("WARN","Not specify -p, use default($HS_M_PORT)");
         }
     }
     if($OPR_START + $OPR_STOP + $OPR_STATUS > 1){
@@ -443,7 +443,7 @@ sub getMasterStatus{
         if($code == 0){
             return ($code,$output);
         }elsif($trys < $try_to){
-            logMessage("NOTICE","Check master status occur error, will try again");
+            logMessage("WARN","Check master status occur error, will try again");
         }
     }
     return ($code,$output);
@@ -868,22 +868,22 @@ sub getStatus{
     }
     readHealthStatus();
     my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
-    my $level = "INFO";
+    my $info1 = "INFO";
     if($procpid ne ""){
         $HS_PID = $procpid;
     }else{
         $HS_PID = "ERROR (Not found process id, maybe not running)";
-        $level = "WARN";
+        $info1 = "WARN";
     }
-    my ($standby_procpid,$standby_level) = ("ERROR (Not found process id, maybe not running)","WARN");
+    my ($standby_procpid,$info2) = ("ERROR (Not found process id, maybe not running)","WARN");
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
-            ($standby_procpid,$standby_level) = ($procpid,"INFO");
+            ($standby_procpid,$info2) = ($procpid,"INFO");
         }
     }
-    logMessage($level,"  Master process id     : $HS_PID");
-    logMessage($standby_level,"  Standby process id    : $standby_procpid");
+    logMessage($info1,"  Master process id     : $HS_PID");
+    logMessage($info2,"  Standby process id    : $standby_procpid");
     logMessage("INFO","  Database Username     : $HS_PGUSER");
     logMessage("INFO","  Master DataDirectory  : $HS_M_PGDD");
     logMessage("INFO","  Master Hostname       : $HS_M_HSNM");
@@ -962,7 +962,7 @@ sub main{
                 last;
             }
             if($trys < $try_to){
-                logMessage("NOTICE","Start cluster failed, will try again");
+                logMessage("WARN","Start cluster failed, will try again");
                 sleep($HEALTH_CHECK_SLEEP);
             }
         }
