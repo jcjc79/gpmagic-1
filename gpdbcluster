@@ -10,7 +10,7 @@ my ($MASTER_STATUS_OK,$MASTER_STATUS_ERROR) = ("Normal","Error");
 my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN,$ROLE_CHECK_SLEEP) = ("Unknown","Master","Standby","Unknown",60);
 my ($STANDBY_STATUS_OK,$STANDBY_STATUS_ERROR,$STANDBY_STATUS_UNCONFIGUED) = ("Synchronized","UnSynchronized","Unconfiged");
 my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (10,29,60,20);
-my ($HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP) = (4,1,20);
+my ($MAX_HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP,$COMMAND_FAIL_SLEEP) = (4,1,20,300);
 my ($HEALTH_STATUS_FILE,$HEALTH_CHECK_FILE) = ($ENV{"HOME"}."/.gpdbcluster.health.status",$ENV{"HOME"}."/.gpdbcluster.health.check");
 my ($SQL_DELIM,$RECORD_SPLIT) = (chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my ($FIRST_CHECK_STANDBY_PROCESS) = ($TRUE);
@@ -23,7 +23,7 @@ my @HEALTH_STATUS_LIST = (\$HS_PID,\$HS_PGUSER,\$HS_M_PGDD,\$HS_M_HSNM,\$HS_M_PO
 my $HOSTS_SPLIT = 'HOSTS-'.chr(0).'-SPLIT';
 my @HOST_CONTENT_LIST;
 my ($CURRENT_HOSTNAME);
-my ($INSTANCE_CHECKSUM,$RECOVER_TIMES,$REBALANCE_TIMES,$RESYNC_STANDBY_TIMES) = (undef,0,0,0);
+my ($INSTANCE_CHECKSUM,$RECOVER_TIMES,$REBALANCE_TIMES,$RESYNC_STANDBY_TIMES,$START_CLUSTER_TIMES,$STOP_MASTER_TIMES) = (undef,0,0,0,0,0);
 
 my ($OPR_START,$OPR_STOP,$OPR_STATUS,$START_ROLE,$IS_HELP,$VERSION);
 
@@ -403,6 +403,13 @@ sub checkSegmentHostUp{
     return $TRUE;
 }
 sub startCluster{
+    if($START_CLUSTER_TIMES >= $MAX_HEALTH_CHECK_TIMES){
+        logMessage("WARN","Have try many times to start cluster, skip to execute any try");
+        sleep($START_CLUSTER_SLEEP);
+        return (1,"");
+    }else{
+        $START_CLUSTER_TIMES += 1;
+    }
     while($TRUE){
         logMessage("INFO","Try to check whether segment enough for start cluster");
         my $status = checkSegmentHostUp($FALSE);
@@ -423,7 +430,7 @@ sub startCluster{
 }
 sub getMasterStatus{
     my ($once) = @_;
-    my ($try_from,$try_to) = (1,$HEALTH_CHECK_TIMES);
+    my ($try_from,$try_to) = (1,$MAX_HEALTH_CHECK_TIMES);
     if($TRUE eq $once){
         $try_to = $try_from;
     }
@@ -602,7 +609,7 @@ sub executeSegmentRecover{
     }else{
         ($INSTANCE_CHECKSUM,$RECOVER_TIMES) = ($checksum,0);
     }
-    if($RECOVER_TIMES >= $HEALTH_CHECK_TIMES){
+    if($RECOVER_TIMES >= $MAX_HEALTH_CHECK_TIMES){
         logMessage("WARN","Have try many times to execute recover");
         return $FALSE;
     }
@@ -627,7 +634,7 @@ sub executeSegmentRebalance{
     }else{
         ($INSTANCE_CHECKSUM,$REBALANCE_TIMES) = ($checksum,0);
     }
-    if($REBALANCE_TIMES >= $HEALTH_CHECK_TIMES){
+    if($REBALANCE_TIMES >= $MAX_HEALTH_CHECK_TIMES){
         logMessage("WARN","Have try many times to execute rebalance");
     }
     logMessage("INFO","Execute command: gprecoverseg -a -r");
@@ -642,20 +649,32 @@ END_OF_COMMAND});
     }
 }
 sub stopMaster{
+    if($STOP_MASTER_TIMES >= $MAX_HEALTH_CHECK_TIMES){
+        logMessage("WARN","Have try many times to stop master, try again after $COMMAND_FAIL_SLEEP seconds");
+        sleep($COMMAND_FAIL_SLEEP);
+    }else{
+        $STOP_MASTER_TIMES += 1;
+    }
     my ($code,$output) = executeCommand(qq{ping $HS_M_HSNM -c 1 -w 1 2>&1});
     if($code == 0){
-        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T 'ps ax|grep postgres|grep -v grep|grep "M master"|wc -l' 2> /dev/null});
-        if($output eq "0"){
+        logMessage("INFO","Master is still alive, try to stop master");
+        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "ps ax|grep postgres|grep -v grep|grep 'M master'}.q(|awk '{print \\$1}' 2> /dev/null"));
+        if($code == 0 && $output eq ""){
+            logMessage("INFO","Execute command on $HS_M_HSNM: rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock");
             executeCommand(qq(sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock"));
+            $STOP_MASTER_TIMES = 0;
             return $TRUE;
         }
-        logMessage("INFO","Master is still alive, try to stop master");
-        executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "pg_ctl stop -D $HS_M_PGDD -m immediate 2>&1"});
-        sleep 3;
-        executeCommand(qq{sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "ps ax|grep postgres|grep -v grep|grep 'M master'}.q(|awk '{print \\$1}'|xargs -i kill -9 {}"));
-        executeCommand(qq(sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock"));
-        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T 'ps ax|grep postgres|grep -v grep|grep "M master"|wc -l' 2> /dev/null});
-        if($output eq "0"){
+        logMessage("INFO","Execute command on $HS_M_HSNM: pg_ctl stop -D $HS_M_PGDD -m immediate");
+        ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER ssh $HS_M_HSNM -T "pg_ctl stop -D $HS_M_PGDD -m immediate 2>&1"});
+        if($code != 0){
+            executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "ps ax|grep postgres|grep -v grep|grep 'M master'}.q(|awk '{print \\$1}|xargs -i kill -9 {}' 2> /dev/null"));
+        }
+        ($code,$output) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "ps ax|grep postgres|grep -v grep|grep 'M master'}.q(|awk '{print \\$1}' 2> /dev/null"));
+        if($code == 0 && $output eq ""){
+            logMessage("INFO","Execute command on $HS_M_HSNM: rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock");
+            executeCommand(qq(sudo sudo -u $HS_PGUSER ssh $HS_M_HSNM -T "rm -f /tmp/.s.PGSQL.$HS_M_PORT /tmp/.s.PGSQL.$HS_M_PORT.lock"));
+            $STOP_MASTER_TIMES = 0;
             return $TRUE;
         }else{
             return $FALSE;
@@ -670,6 +689,7 @@ sub stopMaster{
                 return $FALSE;
             }
         }
+        $STOP_MASTER_TIMES = 0;
         return $TRUE;
     }
 }
@@ -677,7 +697,7 @@ sub resyncStandby{
     if($HS_S_STAT eq $STANDBY_STATUS_UNCONFIGUED){
         return;
     }
-    if($RESYNC_STANDBY_TIMES < $HEALTH_CHECK_TIMES){
+    if($RESYNC_STANDBY_TIMES < $MAX_HEALTH_CHECK_TIMES){
         $RESYNC_STANDBY_TIMES += 1;
         logMessage("INFO","Execute command: gpinitstandby -a -n");
         executeCommand(qq{sudo sudo -iu $HS_PGUSER sh -c "gpinitstandby -a -n" 2>&1});
@@ -698,18 +718,24 @@ sub startMasterListener{
                 $RESYNC_STANDBY_TIMES = 0;
             }
             checkStandbyProcess();
-            updateHealthStatus();
         }else{
             $HS_M_STAT = $MASTER_STATUS_ERROR;
             logMessage("WARN","Local Master status error:\n".$output);
-            stopMaster();
-            my $status = checkStandbyIsActivated();
-            if($status eq $TRUE){
-                logMessage("WARN","Remote standby is activated, exit");
-                exitMain(0);
+            if($HS_S_STAT eq $STANDBY_STATUS_OK){
+                stopMaster();
+                my $status = checkStandbyIsActivated();
+                if($status eq $TRUE){
+                    logMessage("WARN","Remote standby is activated, exit");
+                    exitMain(0);
+                }
+            }else{
+                logMessage("WARN","Standby status is: $HS_S_STAT, nothing can do");
+                updateHealthStatus();
+                sleep($SQL_SLEEP + $HEALTH_CHECK_SLEEP);
+                next;
             }
-            updateHealthStatus();
         }
+        updateHealthStatus();
         if($code == 0){
             my ($status,$down,$resync,$failover,$checksum) = getClusterSegmentStatus();
             if($status eq $FALSE){
@@ -955,16 +981,12 @@ sub main{
     #Start Master script
         logMessage("INFO","Current host is master");
         $CURRENT_HOSTNAME = $HS_M_HSNM;
-        my ($try_from,$try_to) = (1,$HEALTH_CHECK_TIMES);
-        for my $trys($try_from .. $try_to){
+        while($TRUE){
             my $status = firstCheckMasterStatus();
             if($status eq $TRUE){
                 last;
             }
-            if($trys < $try_to){
-                logMessage("WARN","Start cluster failed, will try again");
-                sleep($HEALTH_CHECK_SLEEP);
-            }
+            sleep($HEALTH_CHECK_SLEEP);
         }
         startMain();
         startMasterListener();
