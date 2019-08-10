@@ -872,7 +872,7 @@ sub stopProcess{
     readHealthStatus();
     my ($m_code,$m_procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($m_procpid eq ""){
-        errorMessage("No process running currently");
+        logMessage("WARN","No process running currently");
     }
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         stopResource($HS_S_HSNM);
