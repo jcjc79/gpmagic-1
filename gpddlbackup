@@ -484,7 +484,7 @@ sub outputResourceQueue{
     for my $row(@result){
         my ($oid,$rsqname,$resname,$ressetting,$restypid) = @$row;
         $rsqname = quote(decode($rsqname));
-        if("MEMORY_LIMIT" eq uc($rsqname)){
+        if("MEMORY_LIMIT" eq uc($resname)){
             $ressetting = "'".$ressetting."'";
         }
         if(exists $name_map{$rsqname}){
@@ -1181,6 +1181,7 @@ sub formatFmtOpts{
     my $item = "";
     my $index = 0;
     my $size = @array;
+    my $left = 1;
     for my $curr(@array){
         $index ++;
         my $ascii = ord($curr);
@@ -1196,9 +1197,10 @@ sub formatFmtOpts{
                 $item = "E".$item;
             }
             if($fmttype eq "b"){
-               $result = $result." = ".$item.",";
+                $result = $result.($left == 1 ? "" : " = ").$item.",";
+                $left = 1 - $left;
             }else{
-               $result = $result." ".$item;
+                $result = $result." ".$item;
             }
             $item = "";
         }
