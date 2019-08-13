@@ -759,7 +759,7 @@ sub readLineFromFile{
 }
 sub queryResult{
     my ($src_or_dest,$query_sql,$return_flag) = @_;
-    my $CMDS = "PGAPPNAME=gpdbtransfer PGOPTIONS='-c client_encoding=UTF8' ";
+    my $CMDS = "PGAPPNAME=gpdbtransfer PGOPTIONS='-c client_encoding=UTF8".($NEED_ANALYZE ? "" : " -c gp_autostats_mode=NONE")."' ";
     if("SRC" eq $src_or_dest){
         $CMDS = $CMDS."PGHOST='$SRC_HOST' PGDATABASE='$SRC_DATABASE' PGPORT=$SRC_PORT ";
         $CMDS = $CMDS.("" ne $SRC_USER ? "PGUSER='$SRC_USER' " : "").("" ne $SRC_PASSWD ? "PGPASSWORD='$SRC_PASSWD' " : "");
@@ -1604,9 +1604,6 @@ sub executeTransfer{
             my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "LOW" : "FAST")." WITH $where");
             $MSG_QUEUE->enqueue(\@info_msg);
             my $dest_sql = qq{BEGIN;LOCK TABLE $dest_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\ninsert into $dest_tableqq select * from $dest_ext_table;\nEND;};
-            if(!$NEED_ANALYZE){
-                $dest_sql = "set gp_autostats_mode to none;\n".$dest_sql;
-            }
             my $start = time();
             ($code,$value) = queryResult("DEST",$dest_sql,"CV");
             my $duration = time() - $start;
