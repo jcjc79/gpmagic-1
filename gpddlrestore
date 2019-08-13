@@ -336,4 +336,4 @@ sub main{
 }
 my $command_string = $0." ".join(" ",@ARGV);
 $| = 1;
-main($command_string)
+main($command_string);
