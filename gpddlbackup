@@ -1197,7 +1197,7 @@ sub formatFmtOpts{
                 $item = "E".$item;
             }
             if($fmttype eq "b"){
-                $result = $result.($left == 1 ? "" : " = ").$item.",";
+                $result = $result.($left == 1 ? "" : " = ").$item.($left == 1 ? "" : ",");
                 $left = 1 - $left;
             }else{
                 $result = $result." ".$item;
