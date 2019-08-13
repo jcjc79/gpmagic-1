@@ -15,7 +15,7 @@ my %OBJECT_BIT_HASH = ("ResourceQueue" => 8192,"Role" => 4096,"TableSpace" => 20
     "Sequence" => 32,"Table" => 16,"ExtTable" => 8,"View" => 4,"Index" => 2,"Comment" => 1);
 my ($DEFAULT_BATCH,$SQL_BATCH_SIZE) = (4096,4096);
 my %OBJECT_BATCH_HASH = ("ResourceQueue" => 256,"Role" => 256,"TableSpace" => 256,"RoleSetting" => 512,"Language" => 256, "Schema" => 256, "Type" => 1024, "Function" => 8192,
-    "Sequence" => 1024,"Table" => 8192,"ExtTable" => 8192,"View" => 8192,"Index" => 512,"Comment" => 512);
+    "Sequence" => 1024,"Table" => 8192,"ExtTable" => 8192,"View" => 8192,"Index" => 512,"Comment" => 16384);
 my ($LOCK_FILE_HANDLE);
 my ($FILE_HANDLE,$TASK_QUEUE,$MSGE_QUEUE);
 my (@TASK_THREAD,$MSGE_THREAD);
