@@ -24,7 +24,7 @@ my %KEY_WORD_SET;
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $MAIN_PID = substr("000000".$$,-6);
 
-my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
+my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords() WHERE catcode <> 'U';#;
 my $RANDOM_TABLE_DDL_CHECK_SQL = qq{select md5(string_agg(attname,',' order by attnum)) from pg_attribute where attnum>0 and attrelid=
     (select oid from pg_class where relname='gp_segment_config' and relnamespace=(select oid from pg_namespace where nspname='gp_toolkit'));};
 my $RANDOM_TABLE_DDL_CHECK_MD5 = "7a2c712df03bf33fdd5fea8f0a2ac8ed";
