@@ -144,7 +144,8 @@ sub exequteQuery{
     }
     print FILE_HANDLE $query_sql;
     close FILE_HANDLE;
-    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c client_encoding=UTF8' ";
+    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c statement_timeout=0 -c client_encoding=UTF8 -c standard_conforming_strings=ON";
+    $CMDS = $CMDS." -c check_function_bodies=OFF -c client_min_messages=WARNING -c default_with_oids=OFF' ";
     local $/ = $RECORD_SPLIT;
     $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' 2>&1 -f $script_file |sed -e 's/psql.*gpdbrestore.script.[0-9]*:[0-9]*: //'";
     my @result = readpipe($CMDS);
