@@ -492,7 +492,7 @@ sub checkStandbyProcess{
         logMessage("INFO","Standby is unconfigured");
         return;
     }
-    my ($code,$procpid) = executeCommand(qq{ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}'));
+    my ($code,$procpid) = executeCommand(qq{ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -w Standby|grep -vw grep|head -n 1"|}.q(awk '{print $1}'));
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
             logMessage("INFO","Standby exists residual process");
@@ -844,7 +844,7 @@ sub startProcess{
     if($OPR_STOP || $OPR_STATUS){
         return;
     }
-    my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -w Master|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($procpid ne "" && $START_ROLE ne "Master"){
         errorMessage("Process exists with process id: $procpid");
     }
@@ -857,7 +857,7 @@ sub startProcess{
     $start = $start.qq{ --resource '$HS_REOURCE'}.($HS_ENABLE_RECOVER ? " --recover" : "").($HS_ENABLE_REBALANCE ? " --rebalance" : "").qq{ > /dev/null 2>&1 &};
     executeCommand($start);
     sleep($HEALTH_CHECK_SLEEP);
-    ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
+    ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -w Master|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($procpid ne ""){
         logMessage("INFO","Start process success with process id: $procpid");
         exitMain(0);
@@ -870,13 +870,13 @@ sub stopProcess{
         return;
     }
     readHealthStatus();
-    my ($m_code,$m_procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($m_code,$m_procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -w Master|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($m_procpid eq ""){
         logMessage("WARN","No process running currently");
     }
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         stopResource($HS_S_HSNM);
-        my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|awk '{print \$1}'));
+        my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -w Standby|grep -vw grep|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             logMessage("INFO","Stop process id on standby: $procpid");
             executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid" 2>&1});
@@ -893,7 +893,7 @@ sub getStatus{
         return;
     }
     readHealthStatus();
-    my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($code,$procpid) = executeCommand(qq(ps ax|grep -w $CMD_NAME|grep -w Master|grep -vw grep|grep -vw $$|head -n 1|awk '{print \$1}'));
     my $info1 = "INFO";
     if($procpid ne ""){
         $HS_PID = $procpid;
@@ -903,7 +903,7 @@ sub getStatus{
     }
     my ($standby_procpid,$info2) = ("ERROR (Not found process id, maybe not running)","WARN");
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
-        ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|awk '{print \$1}'));
+        ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "ps ax|grep -w $CMD_NAME|grep -w Standby|grep -vw grep|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             ($standby_procpid,$info2) = ($procpid,"INFO");
         }
