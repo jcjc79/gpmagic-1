@@ -342,6 +342,13 @@ sub quote{
     }
     return $ident;
 }
+sub getTableName{
+    my ($ident) = @_;
+    $ident =~ s/""/"/g;
+    $ident =~ s/'/''/g;
+    $ident =~ s/^"|"$//g;
+    return $ident;
+}
 sub isTempSchema{
     if($_[0] =~ /^pg_temp_/ || $_[0] =~ /^pg_toast_temp_/){
         return 1;
@@ -983,8 +990,8 @@ sub getPartitionInformation{
         my ($oid,$paroid,$parchildrelid,$parparentrule,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,
             $parrangestart,$parrangeend,$rule_def) = @$row;
         ($parname,$parrangestart,$parrangeend,$rule_def) = (decode($parname),decode($parrangestart),decode($parrangeend),decode($rule_def));
+        my $relation = getTableName(@{$MAP_OF_TABLE{$parchildrelid}}[0]);
         if($parname eq ""){
-            my $relation = @{$MAP_OF_TABLE{$parchildrelid}}[0];
             $parname = $relation;
             $parname =~ s/^.+_prt_//;
         }
@@ -994,7 +1001,7 @@ sub getPartitionInformation{
         if(exists $MAP_OF_PARTITION_RULE{$key}){
             @rule_array = @{$MAP_OF_PARTITION_RULE{$key}};
         }
-        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,trim($rule_def))];
+        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,trim($rule_def),$relation)];
         $MAP_OF_PARTITION_RULE{$key} = [@rule_array];
         $MAP_OF_PARTITION_OID{$parchildrelid} = "";
     }
@@ -1004,7 +1011,7 @@ sub getNextLevelPartition{
     my @rule_array = @{$MAP_OF_PARTITION_RULE{$key}};
     my @partition_array;
     for my $row(@rule_array){
-        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def,$relation) = @$row;
         my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[12];
         my $nextKey = $oid;
         my $reloptions = "";
@@ -1015,13 +1022,13 @@ sub getNextLevelPartition{
                 $reloptions = $parreloptions;
             }
             if($paroptions eq $reloptions){
-                $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ /;
+                $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ WITH(TABLENAME='$relation')/;
             }else{
-                $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
+                $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH(TABLENAME='$relation',$reloptions) /;
             }
             $rule_def =~ s/\s+$//;
         }else{
-            $rule_def = $rule_def." WITH(APPENDONLY=FALSE)";
+            $rule_def = $rule_def." WITH(TABLENAME='$relation',APPENDONLY=FALSE)";
         }
         if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION /){
             $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
@@ -1046,7 +1053,7 @@ sub getPartitionTemplate{
         my @rule_array = @{$MAP_OF_PARTITION_RULE{$key}};
         my @partition_array;
         for my $row(@rule_array){
-            my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+            my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def,$relation) = @$row;
             my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[12];
             if($rule_def =~ /\s*WITH\s*\((.*)\)\s*/){
                 my $reloptions = uc($1);
@@ -1056,6 +1063,8 @@ sub getPartitionTemplate{
                 }
                 $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
                 $rule_def =~ s/\s+$//;
+            }else{
+                $rule_def = $rule_def." WITH(APPENDONLY=FALSE)";
             }
             push @partition_array,$INDENT.$rule_def;
         }
