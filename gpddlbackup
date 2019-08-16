@@ -1022,7 +1022,7 @@ sub getNextLevelPartition{
                 $reloptions = $parreloptions;
             }
             if($paroptions eq $reloptions){
-                $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ WITH(TABLENAME='$relation')/;
+                $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ WITH(TABLENAME='$relation') /;
             }else{
                 $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH(TABLENAME='$relation',$reloptions) /;
             }
