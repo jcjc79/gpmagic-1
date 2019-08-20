@@ -768,7 +768,7 @@ sub switchMasterAndStandby{
 }
 sub activeStandby{
     if($ACTIVE_STANDBY_TIMES >= $MAX_HEALTH_CHECK_TIMES){
-        logMessage("WARN","Have try many times to stop master, try again after $COMMAND_FAIL_SLEEP seconds");
+        logMessage("WARN","Have try many times to activate standby, try again after $COMMAND_FAIL_SLEEP seconds");
         sleep($COMMAND_FAIL_SLEEP);
     }else{
         $ACTIVE_STANDBY_TIMES += 1;
