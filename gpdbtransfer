@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use List::Util qw(shuffle);
 use Fcntl qw(:flock);
 use POSIX;
@@ -860,9 +861,7 @@ sub checkOption{
     if(!open($LOG_FILE_HANDLE,">>",$log_file)){
         errorMessage("Can't open file:$log_file");
     }else{
-        my $stdout = select $LOG_FILE_HANDLE;
-        $| = 1;
-        select $stdout;
+        $LOG_FILE_HANDLE->autoflush(1);
         logMessage("INFO","Log file:$log_file");
     }
     if("" eq $BATCH_SIZE || $BATCH_SIZE > $BATCH_MAX || $BATCH_SIZE < $BATCH_MIN){
@@ -1727,5 +1726,6 @@ sub main{
     }
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);

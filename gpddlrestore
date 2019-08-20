@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use Fcntl qw(:flock);
 use POSIX;
 use Time::HiRes qw(usleep nanosleep);
@@ -142,6 +143,7 @@ sub exequteQuery{
     if(!open(FILE_HANDLE,">",$script_file)){
         errorMessage("Can't open temp file: $script_file");
     }
+    FILE_HANDLE->autoflush(1);
     print FILE_HANDLE $query_sql;
     close FILE_HANDLE;
     my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c statement_timeout=0 -c client_encoding=UTF8 -c standard_conforming_strings=ON";
@@ -336,5 +338,6 @@ sub main{
     clearTempFile();
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);

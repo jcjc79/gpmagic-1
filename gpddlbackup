@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use Fcntl qw(:flock);
 use POSIX;
 
@@ -409,6 +410,7 @@ sub checkOption{
         if(!open($FILE_HANDLE,">",$TO_FILE)){
             errorMessage("Can't open file: $TO_FILE");
         }
+        $FILE_HANDLE->autoflush(1);
     }
     if($TARGET_VERSION eq ""){
         $TARGET_VERSION = 5;
@@ -1476,5 +1478,6 @@ sub main{
     outputIndex();
     outputComment();
 }
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main();

@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use Fcntl qw(:flock);
 use POSIX;
 
@@ -697,9 +698,7 @@ sub processDataDirectory{
     if(!open($LOG_FILE_HANDLE,">>",$MASTER_LOG_FILE)){
         errorMessage("Can't open file: $MASTER_LOG_FILE");
     }else{
-        my $stdout = select $LOG_FILE_HANDLE;
-        $| = 1;
-        select $stdout;
+        $LOG_FILE_HANDLE->autoflush(1);;
     }
     system("touch $MASTER_LOG_PATH/$LAST_STAT_FILE_NAME");
     system("touch $MASTER_DONE_FILE");
@@ -843,6 +842,7 @@ sub getMergeCommand{
     if(!open($FILE_HANDLE,">",$merge_stat_file)){
         errorMessage("Can't open file: $merge_stat_file");
     }
+    $FILE_HANDLE->autoflush(1);
     print $FILE_HANDLE join("\n",@stat_list)."\n";
     close $FILE_HANDLE;
     for my $time(@$valid_time_list){
@@ -940,6 +940,7 @@ sub logAllTableToFile{
     my $base64_dbname = trim(encode($DATABASE_NAME));
     system("sed '/^$base64_dbname\./d' -i $alltable_file");
     open($FILE_HANDLE,">>",$alltable_file);
+    $FILE_HANDLE->autoflush(1);
     for my $row(@TABLE_ARRAY){
         my ($ao,$scma,$rel) = @$row;
         my ($base64_dbname,$base64_scma,$base64_rel) = (encode($DATABASE_NAME),encode($scma),encode($rel));
@@ -1365,5 +1366,6 @@ sub main{
     }
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);

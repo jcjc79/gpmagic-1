@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use POSIX;
 
 my ($DATABASE_NAME,$BACKUP_DB,$PORT,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$BATCH_SIZE,$DIRECTORY,$GLOBAL_CONDITION,$TIME_TO,
@@ -553,9 +554,7 @@ sub processBackupTimeAndDataDirectory{
     if(!open($LOG_FILE_HANDLE,">>",$MASTER_LOG_FILE)){
         errorMessage("Can't open file: $MASTER_LOG_FILE");
     }else{
-        my $stdout = select $LOG_FILE_HANDLE;
-        $| = 1;
-        select $stdout;
+        $LOG_FILE_HANDLE->autoflush(1);
     }
     system("touch $MASTER_DONE_FILE");
     $WRITE_TO_FILE = 1;
@@ -826,6 +825,7 @@ sub processIndexDropAndLog{
     if(!open($FILE_HANDLE,">>",$index_create_file)){
         errorMessage("Can't open file: $index_create_file");
     }
+    $FILE_HANDLE->autoflush(1);
     for my $row(@INDEX_CREATE_LIST){
         print $FILE_HANDLE $row.";\n";
     }
@@ -833,6 +833,7 @@ sub processIndexDropAndLog{
     if(!open($FILE_HANDLE,">>",$index_drop_file)){
         errorMessage("Can't open file: $index_drop_file");
     }
+    $FILE_HANDLE->autoflush(1);
     for my $row(@INDEX_DROP_LIST){
         print $FILE_HANDLE $row.";\n";
     }
@@ -1002,5 +1003,6 @@ sub main{
     }
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);

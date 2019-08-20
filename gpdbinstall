@@ -3,6 +3,7 @@ use threads;
 use MIME::Base64;
 use File::Basename;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use POSIX;
 use strict;
 
@@ -297,6 +298,7 @@ sub logMessage{
     if($LOG_FILE_HANDLE eq ""){
         my $log_file_date = strftime("%Y%m%d",localtime);
         open($LOG_FILE_HANDLE,">>","/tmp/gpdbinstall_$log_file_date.log");
+        $LOG_FILE_HANDLE->autoflush(1);
     }
     print $LOG_FILE_HANDLE $log_message;
 }
@@ -767,6 +769,7 @@ sub modifySystemConfig{
     if(!open($file_handle,">",$COMMAND_FILE_NAME)){
         errorMessage("Can not open file $COMMAND_FILE_NAME");
     }
+    $file_handle->autoflush(1);
     my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
     $config_command =~ s/GPSEG/$PREFIX/g;
     if("" eq $ENABLE_CORE){
@@ -945,9 +948,11 @@ sub createSegmentFile{
     if(!open($all_hosts_handle,">",$all_hosts)){
         errorMessage("Can't open file: $all_hosts");
     }
+    $all_hosts_handle->autoflush(1);
     if(!open($all_segs_install_handle,">",$all_segs_install)){
         errorMessage("Can't open file: $all_segs_install");
     }
+    $all_segs_install_handle->autoflush(1);
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
         print $all_hosts_handle $hostname."\n";
@@ -1001,6 +1006,7 @@ sub initGpSystem{
     push @init_config,qq{)};
     system(qq{sudo mkdir -p $WORK_PATH/gpdbinstall;sudo touch $WORK_PATH/gpdbinstall/gpinitsystem_config;sudo chmod -R 777 $WORK_PATH/gpdbinstall});
     open(my $init_handle,">","$WORK_PATH/gpdbinstall/gpinitsystem_config");
+    $init_handle->autoflush(1);
     for my $line(@init_config){
         print $init_handle $line."\n";
     }
@@ -1099,6 +1105,7 @@ sub addMirror{
     if(!open($file_handle,">",$file_name)){
         errorMessage("Can't open file: $file_name");
     }
+    $file_handle->autoflush(1);
     print $file_handle "filespaceOrder=\n";
     for my $config(@mirror_config_list){
         print $file_handle $config."\n";
@@ -1142,6 +1149,7 @@ sub addGPFileSpace{
     if(!open($file_handle,">",$file_name)){
         errorMessage("Can't open file: $file_name");
     }
+    $file_handle->autoflush(1);
     print $file_handle "filespace:gpfs\n";
     for my $config(@gpfs_config_list){
         my ($hostname,$dbid,$path) = @$config;
@@ -1282,6 +1290,7 @@ sub createExpandFile{
     if(!open($FILE_HANDLE,">",$input_file)){
         errorMessage("Can't open file: $input_file");
     }
+    $FILE_HANDLE->autoflush(1);
     print $FILE_HANDLE join("\n",@primary_config)."\n";
     if($EXISTS_MIRROR){
         print $FILE_HANDLE join("\n",@mirror_config)."\n";
@@ -1291,6 +1300,7 @@ sub createExpandFile{
     if(!open($FILE_HANDLE,">",$input_file_fs)){
         errorMessage("Can't open file: $input_file_fs");
     }
+    $FILE_HANDLE->autoflush(1);
     print $FILE_HANDLE "filespaceOrder=gpfs\n";
     print $FILE_HANDLE join("\n",@primary_filespace)."\n";
     if($EXISTS_MIRROR){
@@ -1323,7 +1333,8 @@ sub main{
     createExpandFile();
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);
 =start
 ____CONFIG_COMMAND_SHELL_START____
@@ -1588,15 +1599,15 @@ echo "group gpdb {
  }" > /etc/cgconfig.d/gpdb.conf
 if [ $IS_RHEL == 1 ];then
     if [ $RHEL_VERSION == 7 ];then
-        cgconfigparser -l /etc/cgconfig.d/gpdb.conf                               > /dev/null 2>&1
         systemctl enable cgconfig.service                                         > /dev/null 2>&1
+        cgconfigparser -l /etc/cgconfig.d/gpdb.conf                               > /dev/null 2>&1
     else
         service cgconfig start                                                    > /dev/null 2>&1
         chkconfig cgconfig on                                                     > /dev/null 2>&1
     fi
 elif [ $IS_SuSE == 1 ];then
+    zypper install libcgroup-tools                                                > /dev/null 2>&1
     cgconfigparser -l /etc/cgconfig.d/gpdb.conf                                   > /dev/null 2>&1
-    systemctl enable cgconfig.service                                             > /dev/null 2>&1
 fi
 ##################################################################################
 echo "####----"$Directorys

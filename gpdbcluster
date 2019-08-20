@@ -3,6 +3,7 @@ use strict;
 use MIME::Base64;
 use File::Basename;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
 use POSIX;
 
 my ($TRUE,$FALSE) = ("True",undef);
@@ -157,6 +158,7 @@ sub logMessage{
         $LOG_FILE_DATE = $log_file_date;
         my $log_file = $log_path."/".$CMD_NAME."_".$LOG_FILE_DATE.".log";
         open($LOG_FILE_HANDLE,">>",$log_file);
+        $LOG_FILE_HANDLE->autoflush(1);
         if($OPR_STATUS eq ""){
             printMessage("INFO","Current log file is: ".$log_file);
         }
@@ -272,6 +274,8 @@ sub openHealthStatusFile{
     if(not open($HEALTH_CHECK_FILE_HANDLE, $type, $HEALTH_CHECK_FILE)){
         errorMessage("Can't open status file: $HEALTH_CHECK_FILE");
     }
+    $HEALTH_STATUS_FILE_HANDLE->autoflush(1);
+    $HEALTH_CHECK_FILE_HANDLE->autoflush(1);
 }
 sub closeHealthStatusFile{
     if($HEALTH_STATUS_FILE_HANDLE){
@@ -343,16 +347,14 @@ sub writeHealthStatus{
         my ($hostname,$status,$contents) = @$row;
         print $HEALTH_STATUS_FILE_HANDLE $hostname.":".$status.":".$contents."\n";
     }
-    open(CHECK_HANDLE,">",$HEALTH_CHECK_FILE);
     for my $reference(@HEALTH_STATUS_LIST){
-        print CHECK_HANDLE $$reference."\n";
+        print $HEALTH_CHECK_FILE_HANDLE $$reference."\n";
     }
-    print CHECK_HANDLE $HOSTS_SPLIT."\n";
+    print $HEALTH_CHECK_FILE_HANDLE $HOSTS_SPLIT."\n";
     for my $row(@HOST_CONTENT_LIST){
         my ($hostname,$status,$contents) = @$row;
-        print CHECK_HANDLE $hostname.":".$status.":".$contents."\n";
+        print $HEALTH_CHECK_FILE_HANDLE $hostname.":".$status.":".$contents."\n";
     }
-    close CHECK_HANDLE;
     closeHealthStatusFile();
 }
 sub checkMasterOrStandby{
@@ -1001,5 +1003,6 @@ sub main{
     }
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);
