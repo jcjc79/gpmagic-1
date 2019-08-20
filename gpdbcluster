@@ -768,9 +768,9 @@ sub switchMasterAndStandby{
 sub activeStandby{
     my $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a -d $HS_S_PGDD 2>&1"};
     my ($code,$output) = executeCommand($command);
+    my $active = checkStandbyIsActivated();
     if($code != 0){
         logMessage("WARN","Active standby occur error:\n".$output);
-        return $FALSE;
     }
     return switchMasterAndStandby();
 }
@@ -900,10 +900,10 @@ sub getStatus{
     if($procpid ne ""){
         $HS_PID = $procpid;
     }else{
-        $HS_PID = "ERROR (Not found process id, maybe not running)";
+        $HS_PID = "ERROR (Not found process id, may not be running)";
         $info1 = "WARN";
     }
-    my ($standby_procpid,$info2) = ("ERROR (Not found process id, maybe not running)","WARN");
+    my ($standby_procpid,$info2) = ("ERROR (Not found process id, may not be running)","WARN");
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GERP|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
