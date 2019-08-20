@@ -497,7 +497,7 @@ sub checkStandbyProcess{
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
             logMessage("INFO","Standby exists residual process");
-            executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
+            executeCommand(qq{ssh $HS_S_HSNM -T "sudo kill -9 $procpid"});
             $procpid = "";
         }
         $FIRST_CHECK_STANDBY_PROCESS = $FALSE;
@@ -512,7 +512,7 @@ sub checkStandbyProcess{
             executeCommand($start);
         }elsif($HS_S_STAT ne $STANDBY_STATUS_OK && $procpid ne ""){
             logMessage("INFO","Standby status is not good, kill monitor process");
-            executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid"});
+            executeCommand(qq{ssh $HS_S_HSNM -T "sudo kill -9 $procpid"});
         }elsif($HS_S_STAT eq $STANDBY_STATUS_OK && $procpid ne ""){
             logMessage("INFO","Standby monitor process id: $procpid");
         }else{
@@ -638,6 +638,7 @@ sub executeSegmentRebalance{
     }
     if($REBALANCE_TIMES >= $MAX_HEALTH_CHECK_TIMES){
         logMessage("WARN","Have try many times to execute rebalance");
+        return $FALSE;
     }
     logMessage("INFO","Execute command: gprecoverseg -a -r");
     my ($code,$output) = executeCommand(qq{sudo sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
@@ -767,9 +768,8 @@ sub switchMasterAndStandby{
 }
 sub activeStandby{
     if($ACTIVE_STANDBY_TIMES >= $MAX_HEALTH_CHECK_TIMES){
-        logMessage("WARN","Have try many times to active standby, skip to execute any try");
-        sleep($START_CLUSTER_SLEEP);
-        return (1,"");
+        logMessage("WARN","Have try many times to stop master, try again after $COMMAND_FAIL_SLEEP seconds");
+        sleep($COMMAND_FAIL_SLEEP);
     }else{
         $ACTIVE_STANDBY_TIMES += 1;
     }
@@ -887,7 +887,7 @@ sub stopProcess{
         my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GERP|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             logMessage("INFO","Stop process id on standby: $procpid");
-            executeCommand(qq{ssh $HS_S_HSNM -T "kill -9 $procpid" 2>&1});
+            executeCommand(qq{ssh $HS_S_HSNM -T "sudo kill -9 $procpid" 2>&1});
         }
     }
     if($m_procpid ne ""){
