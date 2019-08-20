@@ -4,6 +4,7 @@ use MIME::Base64;
 use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev);
+use IO::Handle qw();
 use POSIX;
 
 my ($PORT,$AGE_THRESHOLD,$BATCH_SIZE,$NOT_PROMPT,$IS_HELP,$LOG_PATH);
@@ -265,9 +266,7 @@ sub checkOption{
     if(!open($LOG_FILE_HANDLE,">>",$log_file)){
         errorMessage("Can't open file:$log_file");
     }else{
-        my $stdout = select $LOG_FILE_HANDLE;
-        $| = 1;
-        select $stdout;
+        $LOG_FILE_HANDLE->autoflush(1);
     }
     $WRITE_TO_FILE = 1;
     logMessage("INFO","Log file:$log_file");
@@ -557,5 +556,6 @@ sub main{
     freezeSystem();
 }
 my $command_string = $0." ".join(" ",@ARGV);
-$| = 1;
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 main($command_string);
