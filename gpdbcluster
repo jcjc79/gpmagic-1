@@ -768,7 +768,6 @@ sub switchMasterAndStandby{
 sub activeStandby{
     my $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a -d $HS_S_PGDD 2>&1"};
     my ($code,$output) = executeCommand($command);
-    my $active = checkStandbyIsActivated();
     if($code != 0){
         logMessage("WARN","Active standby occur error:\n".$output);
     }
