@@ -8,7 +8,7 @@ use POSIX;
 
 my ($TRUE,$FALSE) = ("True",undef);
 my ($MASTER_STATUS_OK,$MASTER_STATUS_ERROR) = ("Normal","Error");
-my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN,$ROLE_CHECK_SLEEP) = ("Unknown","Master","Standby","Unknown",60);
+my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN) = ("Unknown","Master","Standby","Unknown");
 my ($STANDBY_STATUS_OK,$STANDBY_STATUS_ERROR,$STANDBY_STATUS_UNCONFIGUED) = ("Synchronized","UnSynchronized","Unconfiged");
 my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (10,29,60,20);
 my ($MAX_HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP,$COMMAND_FAIL_SLEEP) = (4,1,20,300);
@@ -962,13 +962,10 @@ sub main{
         errorMessage("You should modify the /etc/sudoers file to disable require tty like:\n#Defaults    requiretty");
     }
     umask(0);
-    while($TRUE){
-        checkMasterOrStandby();
-        if($CURRENT_ROLE ne $ROLE_IS_UNKNOWN){
-            last;
-        }
+    checkMasterOrStandby();
+    if($CURRENT_ROLE eq $ROLE_IS_UNKNOWN){
         logMessage("WARN","Current host is neither Master nor Standby");
-        sleep($ROLE_CHECK_SLEEP);
+        exitMain(1);
     }
     if($CURRENT_ROLE eq $ROLE_IS_STANDBY && $START_ROLE ne "Standby"){
         logMessage("WARN","Standby script can only be started by Master, exit now");
