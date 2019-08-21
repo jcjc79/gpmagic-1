@@ -24,7 +24,7 @@ my @HEALTH_STATUS_LIST = (\$HS_PID,\$HS_PGUSER,\$HS_M_PGDD,\$HS_M_HSNM,\$HS_M_PO
 my $HOSTS_SPLIT = 'HOSTS-'.chr(0).'-SPLIT';
 my @HOST_CONTENT_LIST;
 my ($CURRENT_HOSTNAME);
-my ($INSTANCE_CHECKSUM,$ACTIVE_STANDBY_TIMES,$RECOVER_TIMES,$REBALANCE_TIMES,$RESYNC_STANDBY_TIMES,$START_CLUSTER_TIMES,$STOP_MASTER_TIMES) = (undef,0,0,0,0,0,0);
+my ($INSTANCE_CHECKSUM,$ACTIVATE_STANDBY_TIMES,$RECOVER_TIMES,$REBALANCE_TIMES,$RESYNC_STANDBY_TIMES,$START_CLUSTER_TIMES,$STOP_MASTER_TIMES) = (undef,0,0,0,0,0,0);
 
 my ($OPR_START,$OPR_STOP,$OPR_STATUS,$START_ROLE,$IS_HELP,$VERSION);
 
@@ -562,8 +562,8 @@ sub firstCheckMasterStatus{
     }else{
         logMessage("WARN","Current Master status is BAD");
         readHealthStatus();
-        my $active = checkStandbyIsActivated();
-        if($active eq $FALSE){
+        my $activate = checkStandbyIsActivated();
+        if($activate eq $FALSE){
             ($code,$output) = startCluster();
             if($code != 0){
                 return $FALSE;
@@ -718,11 +718,11 @@ sub startMasterListener{
             logMessage("INFO","Local Master status OK");
             my $status = getStandbyStatus();
             if($status ne $STANDBY_STATUS_OK){
-                my $activatestatus = checkStandbyIsActivated();
-                if($activatestatus eq $TRUE){
+                my $activate = checkStandbyIsActivated();
+                if($activate eq $TRUE){
                     logMessage("WARN","Local Master is OK but Remote standby is activated, exit");
-                    my $stopstatus = stopMaster();
-                    if($stopstatus eq $TRUE){
+                    my $stop = stopMaster();
+                    if($stop eq $TRUE){
                         exitMain(0);
                     }
                 }
@@ -778,17 +778,17 @@ sub switchMasterAndStandby{
     }
     return $status;
 }
-sub activeStandby{
-    if($ACTIVE_STANDBY_TIMES >= $MAX_HEALTH_CHECK_TIMES){
+sub activateStandby{
+    if($ACTIVATE_STANDBY_TIMES >= $MAX_HEALTH_CHECK_TIMES){
         logMessage("WARN","Have try many times to activate standby, try again after $COMMAND_FAIL_SLEEP seconds");
         sleep($COMMAND_FAIL_SLEEP);
     }else{
-        $ACTIVE_STANDBY_TIMES += 1;
+        $ACTIVATE_STANDBY_TIMES += 1;
     }
     my $command = qq{sudo sudo -iu $HS_PGUSER sh -c "export PGPORT=$HS_S_PORT;gpactivatestandby -a -d $HS_S_PGDD 2>&1"};
     my ($code,$output) = executeCommand($command);
     if($code != 0){
-        logMessage("WARN","Active standby occur error:\n".$output);
+        logMessage("WARN","Activate standby occur error:\n".$output);
     }
     return switchMasterAndStandby();
 }
@@ -807,7 +807,7 @@ sub startStandbyListener{
         }else{
             my $status = stopMaster();
             if($status eq $TRUE){
-                my $status = activeStandby();
+                my $status = activateStandby();
                 if($status eq $TRUE){
                     return;
                 }
