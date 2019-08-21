@@ -718,11 +718,13 @@ sub startMasterListener{
             logMessage("INFO","Local Master status OK");
             my $status = getStandbyStatus();
             if($status ne $STANDBY_STATUS_OK){
-                my $status = checkStandbyIsActivated();
-                if($status eq $TRUE){
+                my $activatestatus = checkStandbyIsActivated();
+                if($activatestatus eq $TRUE){
                     logMessage("WARN","Local Master is OK but Remote standby is activated, exit");
-                    stopMaster();
-                    exitMain(0);
+                    my $stopstatus = stopMaster();
+                    if($stopstatus eq $TRUE){
+                        exitMain(0);
+                    }
                 }
             }
             if($status eq $STANDBY_STATUS_ERROR){
