@@ -971,6 +971,10 @@ sub main{
         logMessage("WARN","Standby script can only be started by Master, exit now");
         exitMain(1);
     }
+    if($START_ROLE eq "" && $OPR_START + $OPR_STOP + $OPR_STATUS == 0){
+        logMessage("WARN","Must specify --start or --stop or --status");
+        exitMain(1);
+    }
     startProcess();
     stopProcess();
     getStatus();
