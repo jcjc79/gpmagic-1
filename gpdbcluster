@@ -717,6 +717,14 @@ sub startMasterListener{
             $HS_M_STAT = $MASTER_STATUS_OK;
             logMessage("INFO","Local Master status OK");
             my $status = getStandbyStatus();
+            if($status ne $STANDBY_STATUS_OK){
+                my $status = checkStandbyIsActivated();
+                if($status eq $TRUE){
+                    logMessage("WARN","Local Master is OK but Remote standby is activated, exit");
+                    stopMaster();
+                    exitMain(0);
+                }
+            }
             if($status eq $STANDBY_STATUS_ERROR){
                 resyncStandby();
             }else{
