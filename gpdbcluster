@@ -702,6 +702,10 @@ sub resyncStandby{
     if($HS_S_STAT eq $STANDBY_STATUS_UNCONFIGUED){
         return;
     }
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SSH_TEST_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "date" 2>&1});
+    if($code != 0){
+        return $FALSE;
+    }
     if($RESYNC_STANDBY_TIMES < $MAX_HEALTH_CHECK_TIMES){
         $RESYNC_STANDBY_TIMES += 1;
         logMessage("INFO","Execute command: gpinitstandby -a -n");
