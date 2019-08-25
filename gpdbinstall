@@ -20,7 +20,7 @@ my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',
 my ($MIRROR_MODE_RING,$MIRROR_MODE_PAIR) = ("RING","PAIR");
 
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$MIRROR_MODE,$IGNORE_INIT,
-    $IGNORE_HOSTS,$ENABLE_CORE,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+    $IGNORE_HOSTS,$CORE_PATH,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
@@ -405,7 +405,7 @@ sub getOption{
         'mirror-mode:s'       => \$MIRROR_MODE,
         'ignore-init!'        => \$IGNORE_INIT,
         'ignore-hosts!'       => \$IGNORE_HOSTS,
-        'core-dump!'          => \$ENABLE_CORE,
+        'core-path:s'         => \$CORE_PATH,
         'expand!'             => \$EXPAND,
         'gpconfig:s'          => \@GP_CONFIG,
         'verbose|v!'          => \$VERBOSE,
@@ -441,7 +441,7 @@ sub getOption{
             if("mirror-mode"     eq $para  && "" eq $MIRROR_MODE     ){$MIRROR_MODE      = $val;}
             if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT      = 1   ;}
             if("ignore-hosts"    eq $para  && "" eq $IGNORE_HOSTS    ){$IGNORE_HOSTS     = 1   ;}
-            if("core-dump"       eq $para  && "" eq $ENABLE_CORE     ){$ENABLE_CORE      = 1   ;}
+            if("core-path"       eq $para  && "" eq $CORE_PATH       ){$CORE_PATH        = $val;}
             if("expand"          eq $para  && "" eq $EXPAND          ){$EXPAND           = 1   ;}
             if("gpconfig"        eq $para                            ){push @GP_CONFIG   , $val;}
             if(("verbose"        eq $para  ||
@@ -827,9 +827,11 @@ sub modifySystemConfig{
     $file_handle->autoflush(1);
     my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
     $config_command =~ s/GPSEG/$PREFIX/g;
-    if("" eq $ENABLE_CORE){
+    if("" eq $CORE_PATH){
         $config_command =~ s/.*soft core   unlimited.*//;
-        $config_command =~ s/.*kernel.core_pattern.*//;
+        $config_command =~ s/.*CORE_PATH_PLACE.*\n//g;
+    }else{
+        $config_command =~ s/CORE_PATH_PLACE/$CORE_PATH/g;
     }
     if("" ne $IGNORE_HOSTS){
         $config_command =~ s/HOSTNAME_CONFIG_START.*HOSTNAME_CONFIG_END//s;
@@ -1493,8 +1495,8 @@ DEVC=$7
 Directorys=""
 ##################################################################################
 umask 0022
-mkdir -p /var/core
-chmod 0777 /var/core
+mkdir -p CORE_PATH_PLACE
+chmod 0777 CORE_PATH_PLACE
 ##################################################################################
 CURRENT_USER=`whoami`
 if [ $CURRENT_USER != "root" ];then
@@ -1606,7 +1608,7 @@ kernel.shmmni = 40960
 kernel.shmall = 40000000000
 kernel.sem = 500 20480000 200 40960
 kernel.sysrq = 1
-kernel.core_pattern = /var/core/core.%h.%u.%e.%p.%t
+kernel.core_pattern = CORE_PATH_PLACE/core.%h.%u.%e.%p.%t
 kernel.core_uses_pid = 1
 kernel.msgmnb = 1048576
 kernel.msgmax = 1048576
