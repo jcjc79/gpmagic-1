@@ -17,8 +17,9 @@ if($ENV{PATH} !~ "/sbin"){
 }
 my @NEED_COMMAND = ("ip","sed","zip","unzip","less","bash","tar","perl","expect","ssh","ifconfig","mkfs.xfs");
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my ($MIRROR_MODE_RING,$MIRROR_MODE_PAIR) = ("RING","PAIR");
 
-my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$MIRROR_MODE,$IGNORE_INIT,
     $IGNORE_HOSTS,$ENABLE_CORE,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
@@ -69,6 +70,7 @@ $CMD_NAME --hosts-config <filename>
     [--mas-port <master work port>]
     [--port-base <primary instance port base>]
     [--mirror-split <amount of machine which mirror split to>]
+    [--mirror-mode <mode name>]
     [--ignore-init]
     [--ignore-hosts]
     [--core-dump]
@@ -176,7 +178,7 @@ OPTIONS
 
 [--prefix <prefix>]
 
-  Instance directory name prefix, defualt is gpseg
+  Instance directory name prefix, default is gpseg
 
 [--mas-port <Master work port>]
 
@@ -194,6 +196,16 @@ OPTIONS
   If this number + 1 bigger or equal to one mirror loop's machine amount, command will exit with error.
   If specify this parameter as 0, command will not config mirror for this cluster.
   Default is 2
+
+[--mirror-mode <mode name>]
+
+  Specify this parameter to choose a mirror mode, default is $MIRROR_MODE_RING
+  Current supported custom modes:
+  $MIRROR_MODE_RING
+  $MIRROR_MODE_PAIR
+
+  e.g.:
+  --mirror-mode $MIRROR_MODE_PAIR
 
 [--ignore-init]
 
@@ -390,6 +402,7 @@ sub getOption{
         'mas-port:i'          => \$MASTER_PORT,
         'port-base:i'         => \$PORT_BASE,
         'mirror-split:i'      => \$MIRROR_SPLIT,
+        'mirror-mode:s'       => \$MIRROR_MODE,
         'ignore-init!'        => \$IGNORE_INIT,
         'ignore-hosts!'       => \$IGNORE_HOSTS,
         'core-dump!'          => \$ENABLE_CORE,
@@ -425,6 +438,7 @@ sub getOption{
             if("mas-port"        eq $para  && "" eq $MASTER_PORT     ){$MASTER_PORT      = $val;}
             if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE        = $val;}
             if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT     = $val;}
+            if("mirror-mode"     eq $para  && "" eq $MIRROR_MODE     ){$MIRROR_MODE      = $val;}
             if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT      = 1   ;}
             if("ignore-hosts"    eq $para  && "" eq $IGNORE_HOSTS    ){$IGNORE_HOSTS     = 1   ;}
             if("core-dump"       eq $para  && "" eq $ENABLE_CORE     ){$ENABLE_CORE      = 1   ;}
@@ -527,9 +541,17 @@ sub checkOption{
     }elsif($PORT_BASE > 54000){
         errorMessage("Please specify parameter value less than 54000: --port-base");
     }
+    $MIRROR_MODE = trim(uc($MIRROR_MODE));
+    if($MIRROR_MODE eq ""){
+        logMessage("NOTICE","Not specify --mirror-mode, use default: $MIRROR_MODE_RING");
+        $MIRROR_MODE = $MIRROR_MODE_RING;
+    }
     if($MIRROR_SPLIT eq ""){
         $MIRROR_SPLIT = 2;
         logMessage("NOTICE","Not specify --mirror-split, use default value: $MIRROR_SPLIT");
+    }
+    if($MIRROR_SPLIT > 0 && $SEGS_PER_DISK % $MIRROR_SPLIT != 0){
+        errorMessage("Can not split mirrors, instance per disk must be integral multiple to host number of mirror split");
     }
     if($EXPAND ne ""){
         $IGNORE_INIT = 1;
@@ -736,8 +758,7 @@ sub checkPasswordAndSudo{
     }
 }
 sub checkRingConfig{
-    if($IGNORE_INIT){
-        logMessage("INFO","Ignore check ring legal");
+    if($MIRROR_MODE ne $MIRROR_MODE_RING || $MIRROR_SPLIT == 0){
         return;
     }
     logMessage("INFO","Check ring legal".("." x 16));
@@ -748,7 +769,7 @@ sub checkRingConfig{
     for my $config(@SEG_INSTALL_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
         if($pre_ring == $cur_ring && $pre_order == $cur_order){
-            errorMessage("Diffrent host have same order in same ring");
+            errorMessage("Diffrent host have the same same position");
         }
         if($index > 0 || $all_index == $max_index){
             if($pre_ring != $cur_ring || $all_index == $max_index){
@@ -761,6 +782,40 @@ sub checkRingConfig{
         ($pre_ring,$pre_order) = ($cur_ring,$cur_order);
         $index += 1;
         $all_index += 1;
+    }
+}
+sub checkPairConfig{
+    if($MIRROR_MODE ne $MIRROR_MODE_PAIR || $MIRROR_SPLIT == 0){
+        return;
+    }
+    logMessage("INFO","Check pairs legal".("." x 16));
+    @SEG_INSTALL_CONFIG_ARRAY = sort {$a->[5] <=> $b->[5]} @SEG_INSTALL_CONFIG_ARRAY;
+    my (%ring_hash,@ring_array,$pre_ring,$pre_order);
+    for my $config(@SEG_INSTALL_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
+        if($pre_ring == $cur_ring && $pre_order == $cur_order){
+            errorMessage("Diffrent host have the same same position");
+        }
+        if(exists $ring_hash{$cur_ring}){
+            $ring_hash{$cur_ring} = $ring_hash{$cur_ring} + 1;
+        }else{
+            $ring_hash{$cur_ring} = 1;
+            push @ring_array,$cur_ring;
+        }
+        ($pre_ring,$pre_order) = ($cur_ring,$cur_order);
+    }
+    my $ring_size = @ring_array;
+    if($ring_size % 2 != 0){
+        errorMessage("Use mirror mode PAIR must have even number loop(interger part of position)");
+    }
+    for (my $index = 0; $index < $ring_size; $index += 2){
+        my ($left_array,$right_array) = ($ring_array[$index],$ring_array[$index + 1]);
+        my ($left_size,$right_size) = ($ring_hash{$left_array},$ring_hash{$right_array});
+        if($left_size != $right_size){
+            errorMessage("Use mirror mode PAIR must have the same size in adjacent ring: $left_array -> $left_size but $right_array -> $right_size");
+        }elsif($left_size % $MIRROR_SPLIT != 0){
+            errorMessage("Use mirror mode PAIR, host number $left_size in one pair is not integral multiple to host number of mirror split $MIRROR_SPLIT");
+        }
     }
 }
 sub modifySystemConfig{
@@ -1020,30 +1075,12 @@ sub initGpSystem{
         errorMessage("Error($exit_code) occur when execute system initialization.");
     }
 }
-sub addMirror{
-    if($IGNORE_INIT){
-        logMessage("INFO","Ignore add mirror instance");
-        return;
-    }
-    logMessage("INFO","Add mirror instance".("." x 16));
-    if($MIRROR_SPLIT < 1){
-        logMessage("WARN","Mirror split value small than 1, no need to add mirrors, skip this step.");
-        return;
-    }
-    if($SEGS_PER_DISK % $MIRROR_SPLIT != 0){
-        logMessage("WARN","Can not split mirrors, instance per disk must be integral multiple to host number of mirror split");
-        return;
-    }
-    my $install_seg_size = @SEG_INSTALL_CONFIG_ARRAY;
-    if($install_seg_size % ($MIRROR_SPLIT + 1) != 0){
-        logMessage("WARN","Can not ensure all mirror loop match the split number for all segments number mod loop number ".($MIRROR_SPLIT + 1)." != 0");
-    }
-    my @primary_config_list;
+sub getPrimaryConfig{
     my $query = qq{select hostname,content,fselocation,port from gp_segment_configuration c, pg_filespace_entry e\n};
     $query = $query.qq{where c.dbid = e.fsedbid\n};
     $query = $query.qq{and e.fsefsoid = (select oid from pg_filespace where fsname = 'pg_system')\n};
     $query = $query.qq{and c.preferred_role = 'p' and c.content > -1 order by 1,2};
-    @primary_config_list = queryResult($query);
+    my @primary_config_list = queryResult($query);
     my %primary_config_map = ();
     for my $config(@primary_config_list){
         my ($hostname,$content,$location,$port) = @$config;
@@ -1065,41 +1102,28 @@ sub addMirror{
         push @config_array,[($hostname,$content,$location,$port)];
         $primary_config_map{$hostname} = \@config_array;
     }
-    my @mirror_config_list;
-    my @node_array;
-    my $index = 0;
-    my $max_index = @SEG_INSTALL_CONFIG_ARRAY - 1;
-    my ($pre_hostname,$pre_number);
+    return %primary_config_map;
+}
+sub getGroupSegArray{
+    my @seg_config_array = ();
+    my %ring_hash;
     for my $config(@SEG_INSTALL_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
-        if($index > 0){
-            if($index == $max_index){
-                push @node_array,$hostname;
-            }
-            if($pre_number != $cur_ring || $index == $max_index){
-                my $node_size = @node_array;
-                my $node_index = 0;
-                for my $node(@node_array){
-                    my @primary_config_array = @{$primary_config_map{$node}};
-                    my $primary_index = 0;
-                    for my $primary_config(@primary_config_array){
-                        my ($p_hostname,$p_content,$p_location,$p_port) = @$primary_config;
-                        my $mirror_position = ((($primary_index / ($SEGS_PER_DISK / $MIRROR_SPLIT)) % $MIRROR_SPLIT) + $node_index + 1) % $node_size;
-                        my $m_hostname = $node_array[$mirror_position];
-                        my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
-                        my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
-                        push @mirror_config_list,$m_config;
-                        $primary_index += 1;
-                    }
-                    $node_index += 1;
-                }
-                @node_array = ();
-            }
+        my @ring_array = ();
+        if(exists $ring_hash{$cur_ring}){
+            @ring_array = @{$seg_config_array[-1]};
+            push @ring_array,$hostname;
+            $seg_config_array[-1] = [@ring_array];
+        }else{
+            $ring_hash{$cur_ring} = 1;
+            push @ring_array,$hostname;
+            push @seg_config_array,[@ring_array];
         }
-        push @node_array,$hostname;
-        ($pre_hostname,$pre_number) = ($pre_hostname,$cur_ring);
-        $index += 1;
     }
+    return @seg_config_array;
+}
+sub createMirrorConfigFile{
+    my @mirror_config_list = @_;
     my $file_name = "$WORK_PATH/gp_add_mirror_config";
     my $file_handle;
     if(!open($file_handle,">",$file_name)){
@@ -1111,6 +1135,72 @@ sub addMirror{
         print $file_handle $config."\n";
     }
     close $file_handle;
+}
+sub prepareRingMirror{
+    my %primary_config_map = getPrimaryConfig();
+    my @seg_config_array = getGroupSegArray();
+    my @mirror_config_list;
+    my $ring_size = @seg_config_array;
+    for (my $index = 0; $index < $ring_size; $index += 1){
+        my @cur_array = @{$seg_config_array[$index]};
+        my $max_index = @cur_array - 1;
+        for my $index(0 .. $max_index){
+            my $pri_hostname = $cur_array[$index];
+            my @primary_config_array = @{$primary_config_map{$pri_hostname}};
+            my $primary_index = 0;
+            for my $primary_config(@primary_config_array){
+                my ($p_hostname,$p_content,$p_location,$p_port) = @$primary_config;
+                my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index + 1) % ($max_index + 1);
+                my $m_hostname = $cur_array[$mirror_position];
+                my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                push @mirror_config_list,$m_config;
+                $primary_index += 1;
+            }
+        }
+    }
+    createMirrorConfigFile(@mirror_config_list);
+}
+sub preparePairMirror{
+    my %primary_config_map = getPrimaryConfig();
+    my @seg_config_array = getGroupSegArray();
+    my @mirror_config_list;
+    my $ring_size = @seg_config_array;
+    for (my $index = 0; $index < $ring_size; $index += 2){
+        my @left_array = @{$seg_config_array[$index]};
+        my @right_array = @{$seg_config_array[$index + 1]};
+        my $max_index = @left_array - 1;
+        for my $index(0 .. $max_index){
+            my $pri_hostname = $left_array[$index];
+            my @primary_config_array = @{$primary_config_map{$pri_hostname}};
+            my $primary_index = 0;
+            for my $primary_config(@primary_config_array){
+                my ($p_hostname,$p_content,$p_location,$p_port) = @$primary_config;
+                my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
+                my $m_hostname = $right_array[$mirror_position];
+                my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                push @mirror_config_list,$m_config;
+                $primary_index += 1;
+            }
+            $pri_hostname = $right_array[$index];
+            @primary_config_array = @{$primary_config_map{$pri_hostname}};
+            $primary_index = 0;
+            for my $primary_config(@primary_config_array){
+                my ($p_hostname,$p_content,$p_location,$p_port) = @$primary_config;
+                my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
+                my $m_hostname = $left_array[$mirror_position];
+                my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                push @mirror_config_list,$m_config;
+                $primary_index += 1;
+            }
+        }
+    }
+    createMirrorConfigFile(@mirror_config_list);
+}
+sub addMirror{
+    my $file_name = "$WORK_PATH/gp_add_mirror_config";
     my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpaddmirrors -i $file_name -a"};
     if($CLUSTER_EXISTS){
         logMessage("INFO","Addmirrors use this command".$command);
@@ -1236,65 +1326,15 @@ sub gpConfig{
         system($gpconfig);
     }
 }
-sub createExpandFile{
-    if($EXPAND eq ""){
-        return;
-    }
-    my $primary_dbid_index = $MAX_DBID + 1;
-    my $mirror_dbid_index = $MAX_DBID + @SEG_INSTALL_CONFIG_ARRAY * @SEGMENT_DEV * $SEGS_PER_DISK + 1;
-    my $content_index = $MAX_CONTENT + 1;
-    my (@node_array,@primary_config,@mirror_config,@primary_filespace,@mirror_filespace);
-    my $index = 0;
-    my $max_index = @SEG_INSTALL_CONFIG_ARRAY - 1;
-    my ($pre_hostname,$pre_number);
-    for my $config(@SEG_INSTALL_CONFIG_ARRAY){
-        my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
-        if($index > 0 || $index == $max_index){
-            if($index == $max_index){
-                push @node_array,$hostname;
-            }
-            if($pre_number != $cur_ring || $index == $max_index){
-                my $node_size = @node_array;
-                my $node_index = 0;
-                for my $primary_host(@node_array){
-                    my $port_index = $PORT_BASE;
-                    my $primary_index = 0;
-                    for my $path(@SEGMENT_DEV){
-                        for my $in_disk_index(1 .. $SEGS_PER_DISK){
-                            my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                            push @primary_config,"$primary_host:$primary_host:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
-                            push @primary_filespace,$primary_dbid_index.":/$path/primary/gpfs/$PREFIX"."$content_index";
-                            if($EXISTS_MIRROR){
-                                my $mirror_position = ((($primary_index / ($SEGS_PER_DISK / $MIRROR_SPLIT)) % $MIRROR_SPLIT) + $node_index + 1) % $node_size;
-                                my $mirror_host = $node_array[$mirror_position];
-                                push @mirror_config,"$mirror_host:$mirror_host:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
-                                push @mirror_filespace,$mirror_dbid_index.":/$path/mirror/gpfs/$PREFIX"."$content_index";
-                            }
-                            $primary_index += 1;
-                            $primary_dbid_index += 1;
-                            $mirror_dbid_index += 1;
-                            $content_index += 1;
-                        }
-                    }
-                    $node_index += 1;
-                }
-                @node_array = ();
-            }
-        }
-        push @node_array,$hostname;
-        ($pre_hostname,$pre_number) = ($pre_hostname,$cur_ring);
-        $index += 1;
-    }
+sub createExpandConfigFile{
+    my ($expand_config,$expand_config_fs) = @_;
     my $input_file = "/tmp/gpexpand_inputfile_".strftime("%Y%m%d_%H%M%S",localtime);
     my $FILE_HANDLE;
     if(!open($FILE_HANDLE,">",$input_file)){
         errorMessage("Can't open file: $input_file");
     }
     $FILE_HANDLE->autoflush(1);
-    print $FILE_HANDLE join("\n",@primary_config)."\n";
-    if($EXISTS_MIRROR){
-        print $FILE_HANDLE join("\n",@mirror_config)."\n";
-    }
+    print $FILE_HANDLE $expand_config;
     close $FILE_HANDLE;
     my $input_file_fs = $input_file.".fs";
     if(!open($FILE_HANDLE,">",$input_file_fs)){
@@ -1302,12 +1342,95 @@ sub createExpandFile{
     }
     $FILE_HANDLE->autoflush(1);
     print $FILE_HANDLE "filespaceOrder=gpfs\n";
-    print $FILE_HANDLE join("\n",@primary_filespace)."\n";
-    if($EXISTS_MIRROR){
-        print $FILE_HANDLE join("\n",@mirror_filespace)."\n";
-    }
+    print $FILE_HANDLE $expand_config_fs;
     close $FILE_HANDLE;
     logMessage("INFO","Input config file for gpexpand is: $input_file and $input_file_fs");
+}
+sub prepareExpandRing{
+    my $primary_dbid_index = $MAX_DBID + 1;
+    my $mirror_dbid_index = $MAX_DBID + @SEG_INSTALL_CONFIG_ARRAY * @SEGMENT_DEV * $SEGS_PER_DISK + 1;
+    my $content_index = $MAX_CONTENT + 1;
+    my @seg_config_array = getGroupSegArray();
+    my (@primary_config_list,@mirror_config_list,@primary_filespace_list,@mirror_filespace_list);
+    my $ring_size = @seg_config_array;
+    for (my $index = 0; $index < $ring_size; $index += 1){
+        my @cur_array = @{$seg_config_array[$index]};
+        my $max_index = @cur_array - 1;
+        for my $index(0 .. $max_index){
+            my $pri_hostname = $cur_array[$index];
+            my $port_index = $PORT_BASE;
+            my $primary_index = 0;
+            for my $path(@SEGMENT_DEV){
+                for my $in_disk_index(1 .. $SEGS_PER_DISK){
+                    my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
+                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    if($EXISTS_MIRROR){
+                        my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index + 1) % ($max_index + 1);
+                        my $m_hostname = $cur_array[$mirror_position];
+                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                    }
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                }
+            }
+        }
+    }
+    push @primary_config_list,@mirror_config_list;
+    push @primary_filespace_list,@mirror_filespace_list;
+    createExpandConfigFile(join("\n",@primary_config_list)."\n",join("\n",@primary_filespace_list)."\n");
+}
+sub prepareExpandPair{
+    my $primary_dbid_index = $MAX_DBID + 1;
+    my $mirror_dbid_index = $MAX_DBID + @SEG_INSTALL_CONFIG_ARRAY * @SEGMENT_DEV * $SEGS_PER_DISK + 1;
+    my $content_index = $MAX_CONTENT + 1;
+    my @seg_config_array = getGroupSegArray();
+    my (@primary_config_list,@mirror_config_list,@primary_filespace_list,@mirror_filespace_list);
+    my $ring_size = @seg_config_array;
+    for (my $index = 0; $index < $ring_size; $index += 2){
+        my @left_array = @{$seg_config_array[$index]};
+        my @right_array = @{$seg_config_array[$index + 1]};
+        my $max_index = @left_array - 1;
+        for my $index(0 .. $max_index){
+            my $pri_hostname = $left_array[$index];
+            my $port_index = $PORT_BASE;
+            my $primary_index = 0;
+            for my $path(@SEGMENT_DEV){
+                for my $in_disk_index(1 .. $SEGS_PER_DISK){
+                    my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
+                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    if($EXISTS_MIRROR){
+                        my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
+                        my $m_hostname = $right_array[$mirror_position];
+                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                    }
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                }
+            }
+            $pri_hostname = $right_array[$index];
+            $port_index = $PORT_BASE;
+            $primary_index = 0;
+            for my $path(@SEGMENT_DEV){
+                for my $in_disk_index(1 .. $SEGS_PER_DISK){
+                    my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
+                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    if($EXISTS_MIRROR){
+                        my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
+                        my $m_hostname = $left_array[$mirror_position];
+                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                    }
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                }
+            }
+        }
+    }
+    push @primary_config_list,@mirror_config_list;
+    push @primary_filespace_list,@mirror_filespace_list;
+    createExpandConfigFile(join("\n",@primary_config_list)."\n",join("\n",@primary_filespace_list)."\n");
 }
 sub main{
     umask(18);
@@ -1321,16 +1444,36 @@ sub main{
     checkHostsConfig();
     checkPasswordAndSudo();
     checkRingConfig();
+    checkPairConfig();
     modifySystemConfig();
     installBinary();
     createSegmentFile();
     exchangeGpadminKey();
     initGpSystem();
-    addMirror();
+    if($MIRROR_SPLIT < 1){
+        logMessage("WARN","Mirror split value small than 1, no need to add mirrors, skip this step.");
+    }else{
+        if($IGNORE_INIT){
+            logMessage("INFO","Ignore add mirror instance");
+        }else{
+            if($MIRROR_MODE eq $MIRROR_MODE_RING){
+                prepareRingMirror();
+            }elsif($MIRROR_MODE eq $MIRROR_MODE_PAIR){
+                preparePairMirror();
+            }
+            addMirror();
+        }
+    }
     addGPFileSpace();
     addStandby();
     gpConfig();
-    createExpandFile();
+    if($EXPAND ne ""){
+        if($MIRROR_MODE eq $MIRROR_MODE_RING){
+            prepareExpandRing();
+        }elsif($MIRROR_MODE eq $MIRROR_MODE_PAIR){
+            prepareExpandPair();
+        }
+    }
 }
 my $command_string = $0." ".join(" ",@ARGV);
 STDOUT->autoflush(1);
