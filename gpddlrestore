@@ -14,9 +14,10 @@ my %BATCH_REGION_HASH = ("Language" => "","Schema" => "","Type" => "","Function"
 my $REGION_TYPE;
 my %OBJECT_BIT_HASH = ("ResourceQueue" => 8192,"Role" => 4096,"TableSpace" => 2048,"RoleSetting" => 1024,"Language" => 512, "Schema" => 256, "Type" => 128, "Function" => 64,
     "Sequence" => 32,"Table" => 16,"ExtTable" => 8,"View" => 4,"Index" => 2,"Comment" => 1);
-my ($DEFAULT_BATCH,$SQL_BATCH_SIZE) = (4096,4096);
-my %OBJECT_BATCH_HASH = ("ResourceQueue" => 256,"Role" => 256,"TableSpace" => 256,"RoleSetting" => 512,"Language" => 256, "Schema" => 256, "Type" => 1024, "Function" => 8192,
-    "Sequence" => 1024,"Table" => 8192,"ExtTable" => 8192,"View" => 8192,"Index" => 512,"Comment" => 16384);
+my ($DEFAULT_BATCH,$SQL_BATCH_SIZE) = (1,1);
+my %OBJECT_BATCH_HASH = ("ResourceQueue" => 16,"Role" => 16,"TableSpace" => 16,"RoleSetting" => 16,"Language" => 4, "Schema" => 4, "Type" => 4, "Function" => 16,
+    "Sequence" => 16,"Table" => 64,"ExtTable" => 64,"View" => 64,"Index" => 1,"Comment" => 128);
+
 my ($LOCK_FILE_HANDLE);
 my ($FILE_HANDLE,$TASK_QUEUE,$MSGE_QUEUE);
 my (@TASK_THREAD,$MSGE_THREAD);
@@ -218,7 +219,7 @@ sub executeRestore{
     my ($index) = @_;
     my $end = 0;
     while(1){
-        my ($task_batch,$task,$size) = ("","",0);
+        my ($task_batch,$task,$tasks) = ("","",0);
         while(1){
             $task = $TASK_QUEUE->dequeue();
             nanosleep(10000);
@@ -227,8 +228,11 @@ sub executeRestore{
                 last;
             }else{
                 $task_batch = $task_batch."\n".$task;
-                $size += length($task);
-                if($size > $SQL_BATCH_SIZE){
+                $tasks += 1;
+                if($REGION_TYPE eq "Table"){
+                    $tasks += () = ($task =~ /PARTITION/g);
+                }
+                if($tasks > $SQL_BATCH_SIZE){
                     last;
                 }
             }
