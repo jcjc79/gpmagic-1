@@ -32,7 +32,7 @@ my ($LOG_FILE_DATE,$LOG_FILE_HANDLE,$HEALTH_STATUS_FILE_HANDLE,$HEALTH_CHECK_FIL
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $CMD_PATH = dirname(__FILE__);
 my $MAIN_PID = substr("000000".$$,-6);
-my $CMD_GERP = "ps ax|grep -w $CMD_NAME|grep '\\-\\-md'|grep '\\-\\-mp'|grep '\\-\\-mp'|grep '\\-\\-sd'|grep -vw grep";
+my $CMD_GERP = 'ps -o pid,comm -p $(pidof perl)'."|grep -w $CMD_NAME";
 
 my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
 Auto switch master and standby role.
@@ -334,6 +334,10 @@ sub readHealthStatus{
     if($HS_PGUSER eq "" || $HS_M_PGDD eq "" || $HS_M_HSNM eq "" || $HS_M_PORT eq "" || @HOST_CONTENT_LIST < 1){
         logMessage("WARN","Can not get normal information from status files.\nYou should make sure that the cluster is normal before the first time run this command.");
         exitMain(1);
+    }
+    my $current_hostname = trim(readpipe("hostname"));
+    if($CURRENT_ROLE eq $ROLE_IS_MASTER && $HS_M_HSNM ne $current_hostname){
+        $HS_M_HSNM = $current_hostname;
     }
     closeHealthStatusFile();
 }
