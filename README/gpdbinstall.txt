@@ -209,17 +209,22 @@ gpexpand_inputfile_YYYYddmm_HHMMSS.fs
 如果在--parameter-file中指定则不需要额外的引号包裹，缺省包含了如下的参数：
 
     gp_vmem_protect_limit                       #根据实际计算，但不小于8192
-    max_appendonly_tables                       -v 50000 -m 50000
-    gp_max_partition_level                      -v 1 -m 1
-    log_min_duration_statement                  -v 30000 -m 30000
-    gp_workfile_limit_per_query                 -v 134217728 -m 134217728
-    gp_enable_relsize_collection                -v on -m on
-    gp_workfile_limit_per_segment               -v 134217728 -m 134217728
-    gp_max_local_distributed_cache              -v 1048576
-    gp_workfile_compress_algorithm              -v zlib
+    default_statistics_target                   -v 15 -m 15
     gp_autostats_mode_in_functions              -v ON_NO_STATS -m ON_NO_STATS
-    writable_external_table_bufsize             -v 16MB -m 16MB
     gp_create_table_random_default_distribution -v on -m on
+    gp_enable_relsize_collection                -v on -m on
+    gp_max_local_distributed_cache              -v 1048576
+    gp_max_partition_level                      -v 1 -m 1
+    gp_segment_connect_timeout                  -v 180 -m 180
+    gp_workfile_limit_per_query                 -v 134217728 -m 134217728
+    gp_workfile_limit_per_segment               -v 134217728 -m 134217728
+    gp_workfile_compress_algorithm              -v zlib
+    log_min_duration_statement                  -v 30000 -m 30000
+    log_timezone                                -v HONGKONG -m HONGKONG
+    max_appendonly_tables                       -v 50000 -m 50000
+    max_fsm_pages                               -v 2000000 -m 2000000
+    max_fsm_relations                           -v 30000 -m 30000
+    writable_external_table_bufsize             -v 16MB -m 16MB
 
 [--parameter-file | --pf <parameter file>]
 将参数放到一个文件中来指定，这样可以更简便和通用化，参数采用key = value的方式指定，
