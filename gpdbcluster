@@ -335,7 +335,7 @@ sub readHealthStatus{
         logMessage("WARN","Can not get normal information from status files.\nYou should make sure that the cluster is normal before the first time run this command.");
         exitMain(1);
     }
-    my $current_hostname = trim(readpipe("hostname"));
+    my $current_hostname = lc(trim(readpipe("hostname")));
     if($CURRENT_ROLE eq $ROLE_IS_MASTER && $HS_M_HSNM ne $current_hostname){
         $HS_M_HSNM = $current_hostname;
     }
@@ -371,7 +371,7 @@ END_OF_COMMAND));
         }else{
             $CURRENT_ROLE = $ROLE_IS_MASTER;
             if($HS_M_HSNM eq ""){
-                $HS_M_HSNM = trim(readpipe("hostname"));
+                $HS_M_HSNM = lc(trim(readpipe("hostname")));
             }
         }
     }else{
