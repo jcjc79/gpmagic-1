@@ -960,7 +960,7 @@ sub startMain{
 }
 sub exitMain{
     my ($code) = @_;
-    if($OPR_STATUS eq "" && $OPR_START eq ""){
+    if($OPR_START + $OPR_STOP + $OPR_STATUS == 0){
         unbindLocalVirtualIp();
         stopResource($CURRENT_HOSTNAME);
     }
