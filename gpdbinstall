@@ -26,20 +26,21 @@ my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMI
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
         "default_statistics_target"                   => "-v 15 -m 15",
-        "max_appendonly_tables"                       => "-v 50000 -m 50000",
-        "gp_max_partition_level"                      => "-v 1 -m 1",
-        "log_min_duration_statement"                  => "-v 30000 -m 30000",
-        "gp_workfile_limit_per_query"                 => "-v 134217728 -m 134217728",
-        "gp_enable_relsize_collection"                => "-v on -m on",
-        "gp_workfile_limit_per_segment"               => "-v 134217728 -m 134217728",
-        "gp_max_local_distributed_cache"              => "-v 1048576",
-        "gp_workfile_compress_algorithm"              => "-v zlib",
         "gp_autostats_mode_in_functions"              => "-v ON_NO_STATS -m ON_NO_STATS",
-        "writable_external_table_bufsize"             => "-v 16MB -m 16MB",
         "gp_create_table_random_default_distribution" => "-v on -m on",
+        "gp_enable_relsize_collection"                => "-v on -m on",
+        "gp_max_local_distributed_cache"              => "-v 1048576",
+        "gp_max_partition_level"                      => "-v 1 -m 1",
+        "gp_segment_connect_timeout"                  => "-v 180 -m 180",
+        "gp_workfile_limit_per_query"                 => "-v 134217728 -m 134217728",
+        "gp_workfile_limit_per_segment"               => "-v 134217728 -m 134217728",
+        "gp_workfile_compress_algorithm"              => "-v zlib",
+        "log_min_duration_statement"                  => "-v 30000 -m 30000",
+        "log_timezone"                                => "-v HONGKONG -m HONGKONG",
+        "max_appendonly_tables"                       => "-v 50000 -m 50000",
         "max_fsm_pages"                               => "-v 2000000 -m 2000000",
         "max_fsm_relations"                           => "-v 30000 -m 30000",
-        "log_timezone"                                => "-v HONGKONG -m HONGKONG",
+        "writable_external_table_bufsize"             => "-v 16MB -m 16MB",
 );
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
 my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
@@ -730,11 +731,6 @@ sub checkHostsConfig{
         @STANDBY_CONFIG = ($s_ip,$s_hostname);
     }
     my @temp_array = ();
-    for my $exists_ip(keys %EXISTS_IP_HASH){
-        my $exists_host = $EXISTS_IP_HASH{$exists_ip};
-        my $exists_role = $EXISTS_HOST_HASH{$exists_host};
-        push @temp_array,[($exists_ip,$exists_host,$exists_role)];
-    }
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
         if($role =~ /^M/){
@@ -840,6 +836,10 @@ sub modifySystemConfig{
     if("" eq $IGNORE_HOSTS){
         print $file_handle "echo -n '127.0.0.1 = localhost\n";
         print $file_handle "#Greenplum = hosts start\n";
+        for my $exists_ip(keys %EXISTS_IP_HASH){
+            my $exists_host = $EXISTS_IP_HASH{$exists_ip};
+            print $file_handle "$exists_ip = $exists_host\n";
+        }
         my ($m_ip,$m_hostname) = @MASTER_CONFIG;
         my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
         for my $config(@ALLHOST_CONFIG_ARRAY){
@@ -1010,6 +1010,11 @@ sub createSegmentFile{
         errorMessage("Can't open file: $all_segs_install");
     }
     $all_segs_install_handle->autoflush(1);
+    for my $exists_ip(keys %EXISTS_IP_HASH){
+        my $exists_host = $EXISTS_IP_HASH{$exists_ip};
+        print $all_hosts_handle $exists_host."\n";
+        print $all_hosts_handle $exists_ip."\n";
+    }
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
         print $all_hosts_handle $hostname."\n";
@@ -1391,7 +1396,10 @@ sub prepareExpandPair{
     my $ring_size = @seg_config_array;
     for (my $index = 0; $index < $ring_size; $index += 2){
         my @left_array = @{$seg_config_array[$index]};
-        my @right_array = @{$seg_config_array[$index + 1]};
+        my @right_array;
+        if($index + 1 < $ring_size){
+            @right_array = @{$seg_config_array[$index + 1]};
+        }
         my $max_index = @left_array - 1;
         for my $index(0 .. $max_index){
             my $pri_hostname = $left_array[$index];
@@ -1410,6 +1418,9 @@ sub prepareExpandPair{
                     }
                     ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
                 }
+            }
+            if($index + 1 >= $ring_size){
+                next;
             }
             $pri_hostname = $right_array[$index];
             $port_index = $PORT_BASE;
