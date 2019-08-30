@@ -1025,7 +1025,7 @@ sub getNextLevelPartition{
         }else{
             $rule_def = $rule_def." WITH(APPENDONLY=FALSE)";
         }
-        if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION /){
+        if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION |^DEFAULT SUBPARTITION /){
             $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
         }
         if(exists $MAP_OF_PARTITION_RULE{$nextKey}){
