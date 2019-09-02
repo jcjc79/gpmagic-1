@@ -940,8 +940,7 @@ sub getDatabaseTablespace{
 sub getTableInformation{
     my @result = queryResult($SQL_GET_TABLE);
     for my $row(@result){
-        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,
-            $relhasoids,$relhassubclass,$relacl,$reloptions) = @$row;
+        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @$row;
         ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions)];
     }
