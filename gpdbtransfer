@@ -488,7 +488,7 @@ OPTIONS
 
 --owner
 
-  Specify this option to set owner -- when use --force option and recreate dest table when needed.
+  Specify this option to set owner -- when use --force option and recreate destination table when needed.
 
 --from-master
 
@@ -595,8 +595,8 @@ OPTIONS
 
 --compress
 
-  Specify this option to enable compress stream transfer between src cluster and dest cluster.
-  If use compress option, you should make sure all dest segment can ssh to all src segment(include master) without password.
+  Specify this option to enable compress stream transfer between src cluster and destination cluster.
+  If use compress option, you should make sure all destination segment can ssh to all src segment(include master) without password.
 
 --where <condition>
 
@@ -896,7 +896,7 @@ sub checkOption{
     if("" eq $DEST_DATABASE){
         errorMessage("Please specify parameter: --dest-database");
     }elsif(illegal($DEST_DATABASE)){
-        errorMessage("Dest database name is not legal:[".escape($DEST_DATABASE)."]");
+        errorMessage("Destination database name is not legal:[".escape($DEST_DATABASE)."]");
     }
     if("" eq $SRC_MAPFILE){
         errorMessage("Please specify parameter: --src-mapfile");
@@ -1439,9 +1439,9 @@ sub checkTableDefinition{
     my $dest_kind_sql = qq{select c.relkind from pg_namespace n,pg_class c  where c.relnamespace=n.oid and n.nspname='$dest_schema' and c.relname='$dest_relation';};
     my ($code,$relkind) = queryResult("DEST",$dest_kind_sql,"CV");
     if($code != 0){
-        return "Check dest relation occur error:".$relkind;
+        return "Check destination table occur error:".$relkind;
     }elsif("" ne $relkind && "r" ne $relkind){
-        return "Dest relation $dest_schema.$dest_relation is not a table";
+        return "Destination relation $dest_schema.$dest_relation is not a table";
     }
     my $recreate_sql = "";
     my $diff_column = "";
