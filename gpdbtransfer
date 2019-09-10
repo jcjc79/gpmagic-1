@@ -778,12 +778,14 @@ sub queryResult{
     local $/ = chr(10);
     chomp($result[-1]) if (@result > 0);
     return ($return_code,join("\n",@result)) if ("CV" eq $return_flag);
+    return ($return_code,@result) if ("CR" eq $return_flag && $return_code != 0);
     errorMessage(join("\n",@result)) if ($return_code);
     return join("\n",@result) if ("Scalar" eq $return_flag);
     my @return_list = ();
     for my $row(@result){
         push @return_list,[split(/$SQL_DELIM/,$row)];
     }
+    return (0,@return_list) if ("CR" eq $return_flag);
     return @return_list;
 }
 sub getOption{
@@ -1436,7 +1438,9 @@ sub checkTableDefinition{
     my ($src_column,$src_table,$dest_schema,$dest_relation) = @_;
     my $dest_kind_sql = qq{select c.relkind from pg_namespace n,pg_class c  where c.relnamespace=n.oid and n.nspname='$dest_schema' and c.relname='$dest_relation';};
     my ($code,$relkind) = queryResult("DEST",$dest_kind_sql,"CV");
-    if("" ne $relkind && "r" ne $relkind){
+    if($code != 0){
+        return "Check dest relation occur error:".$relkind;
+    }elsif("" ne $relkind && "r" ne $relkind){
         return "Dest relation $dest_schema.$dest_relation is not a table";
     }
     my $recreate_sql = "";
@@ -1446,7 +1450,10 @@ sub checkTableDefinition{
     if("r" eq $relkind){
         my $dest_query_sql = qq{select attname,format_type(atttypid,atttypmod) from pg_namespace n,pg_class c,pg_attribute a where c.relnamespace=n.oid and c.oid=a.attrelid};
         $dest_query_sql = $dest_query_sql.qq{ and c.relkind='r' and n.nspname='$dest_schema' and c.relname='$dest_relation' and a.attnum>0 and not a.attisdropped order by a.attnum;};
-        my @dest_column_array = queryResult("DEST",$dest_query_sql);
+        my ($code,@dest_column_array) = queryResult("DEST",$dest_query_sql,"CR");
+        if($code != 0){
+            return "Get destination table columns occur error:\n".join("\n",@dest_column_array);
+        }
         my $dest_column_size = @dest_column_array;
         if($src_column_size eq $dest_column_size){
             for my $idx(0 .. $src_column_size - 1){
@@ -1518,8 +1525,8 @@ sub getSrcTableColumn{
         where  n.nspname='$schema_name' and c.relname='$relation_name'
         and a.attnum>0 and not a.attisdropped order by a.attnum;};
     }
-    my @column_array = queryResult("SRC",$query_sql);
-    return (\@column_array);
+    my ($code,@column_array) = queryResult("SRC",$query_sql,"CR");
+    return ($code,\@column_array);
 }
 sub executeTransfer{
     my ($thread_index) = @_;
@@ -1541,8 +1548,12 @@ sub executeTransfer{
         my $dest_tableqq = qq{"$dest_schema"."$dest_relation"};
         my $problem = "";
         if(!$IGNORE_CHECK){
-            my ($src_column) = getSrcTableColumn($src_scma,$src_rel);
-            $problem = checkTableDefinition($src_column,$src_table,$dest_schema,$dest_relation);
+            my ($src_code,$src_column) = getSrcTableColumn($src_scma,$src_rel);
+            if($src_code != 0){
+                $problem = "Get source table columns occur error:\n".join("\n",@$src_column);
+            }else{
+                $problem = checkTableDefinition($src_column,$src_table,$dest_schema,$dest_relation);
+            }
         }
         if("" ne $problem){
             @stat_msg = ("FAILED",$problem);
