@@ -1439,7 +1439,7 @@ sub checkTableDefinition{
     my $dest_kind_sql = qq{select c.relkind from pg_namespace n,pg_class c  where c.relnamespace=n.oid and n.nspname='$dest_schema' and c.relname='$dest_relation';};
     my ($code,$relkind) = queryResult("DEST",$dest_kind_sql,"CV");
     if($code != 0){
-        return "Check destination table occur error:".$relkind;
+        return "Check destination relation occur error:".$relkind;
     }elsif("" ne $relkind && "r" ne $relkind){
         return "Destination relation $dest_schema.$dest_relation is not a table";
     }
@@ -1452,7 +1452,7 @@ sub checkTableDefinition{
         $dest_query_sql = $dest_query_sql.qq{ and c.relkind='r' and n.nspname='$dest_schema' and c.relname='$dest_relation' and a.attnum>0 and not a.attisdropped order by a.attnum;};
         my ($code,@dest_column_array) = queryResult("DEST",$dest_query_sql,"CR");
         if($code != 0){
-            return "Get destination table columns occur error:\n".join("\n",@dest_column_array);
+            return "Get destination relation columns occur error:\n".join("\n",@dest_column_array);
         }
         my $dest_column_size = @dest_column_array;
         if($src_column_size eq $dest_column_size){
@@ -1471,17 +1471,17 @@ sub checkTableDefinition{
     if("r" eq $relkind && "" eq $diff_column){
         return "";
     }elsif("r" eq $relkind && $FORCE){
-        $recreate_sql = $recreate_sql.qq{LOCK TABLE "$dest_schema"."$dest_relation" IN ACCESS EXCLUSIVE MODE NOWAIT;drop table if exists "$dest_schema"."$dest_relation" cascade;END;\n};
+        $recreate_sql = $recreate_sql.qq{LOCK TABLE "$dest_schema"."$dest_relation" IN ACCESS EXCLUSIVE MODE NOWAIT;DROP TABLE IF EXISTS "$dest_schema"."$dest_relation" CASCADE;END;\n};
         logMessage("NOTICE","Destination table not match the source $diff_column, force recreate it:[$dest_schema.$dest_relation]");
     }elsif("" eq $relkind && $FORCE){
-        logMessage("NOTICE","Destination table not exists, force create it:[$dest_schema.$dest_relation]");
+        logMessage("NOTICE","Destination relation not exists, force create it:[$dest_schema.$dest_relation]");
     }elsif("" eq $relkind && !$FORCE){
-        return "Destination table not exists:[$dest_schema.$dest_relation]";
+        return "Destination relation not exists:[$dest_schema.$dest_relation]";
     }else{
         return "FROM $src_table TO $dest_schema.$dest_relation has unknown problem $diff_column";
     }
     if(("" eq $relkind ||  "" ne $diff_column) && $FORCE){
-        $recreate_sql = $recreate_sql.qq{create table "$dest_schema"."$dest_relation"(\n};
+        $recreate_sql = $recreate_sql.qq{CREATE TABLE "$dest_schema"."$dest_relation"(\n};
         my $comment_sql = "\n";
         for my $idx(0 .. $src_column_size - 1){
             my ($column_name,$column_type,$relation_dsc,$column_dsc) = @{$src_column_array[$idx]};
@@ -1490,16 +1490,16 @@ sub checkTableDefinition{
             $column_dsc =~ s/'/''/g;
             $recreate_sql = $recreate_sql.quote($column_name)."\t".$column_type;
             $recreate_sql = $recreate_sql.($idx < $src_column_size-1 ? ",\n" : "\n");
-            if($idx == 0 && "" ne $relation_dsc){$comment_sql = $comment_sql.qq{comment on table "$dest_schema"."$dest_relation" is '$relation_dsc';\n};}
-            if("" ne $column_dsc){$comment_sql = $comment_sql.qq{comment on column "$dest_schema"."$dest_relation"."$column_name" is '$column_dsc';\n};}
+            if($idx == 0 && "" ne $relation_dsc){$comment_sql = $comment_sql.qq{COMMENT ON TABLE "$dest_schema"."$dest_relation" IS '$relation_dsc';\n};}
+            if("" ne $column_dsc){$comment_sql = $comment_sql.qq{COMMENT ON COLUMN "$dest_schema"."$dest_relation"."$column_name" IS '$column_dsc';\n};}
         }
-        $recreate_sql = $recreate_sql.")with(appendonly=true,compresstype=zlib,compresslevel=5)distributed randomly;";
+        $recreate_sql = $recreate_sql.")WITH(APPENDONLY=TRUE,COMPRESSTYPE=ZLIB,COMPRESSLEVEL=5)DISTRIBUTED RANDOMLY;";
         if("" ne $FORCE_OWNER){
             $recreate_sql = $recreate_sql.qq{ALTER TABLE "$dest_schema"."$dest_relation" OWNER TO $FORCE_OWNER;};
         }
         my ($code,$value) = queryResult("DEST",$recreate_sql.$comment_sql,"CV");
         if($code){
-            return "Recreate destination table occur error:[$value]";
+            return "Recreate destination relation occur error:[$value]";
         }else{
             return "";
         }
@@ -1550,7 +1550,7 @@ sub executeTransfer{
         if(!$IGNORE_CHECK){
             my ($src_code,$src_column) = getSrcTableColumn($src_scma,$src_rel);
             if($src_code != 0){
-                $problem = "Get source table columns occur error:\n".join("\n",@$src_column);
+                $problem = "Get source relation columns occur error:\n".join("\n",@$src_column);
             }else{
                 $problem = checkTableDefinition($src_column,$src_table,$dest_schema,$dest_relation);
             }
@@ -1584,10 +1584,10 @@ sub executeTransfer{
             my $base64_where = encode($where);
             srand;
             my $random = ($SRC_SEG_SIZE eq $DEST_SEG_SIZE) ? 0 : int(rand(1*$SRC_SEG_SIZE*$DEST_SEG_SIZE));
-            my $dest_ext_ddl = "drop external table if exists $dest_ext_table;\n";
-            $dest_ext_ddl = $dest_ext_ddl."create external web table $dest_ext_table(\n";
-            $dest_ext_ddl = $dest_ext_ddl.qq{like $dest_tableqq};
-            $dest_ext_ddl = $dest_ext_ddl."\n)execute E'sh /tmp/fifo/gpdbtransfercat.sh $SRC_GPHOME.$KEY.$SRC_USER.$base64_pass.$thread_index.$DEST_SEG_SIZE";
+            my $dest_ext_ddl = "DROP EXTERNAL TABLE IF EXISTS $dest_ext_table;\n";
+            $dest_ext_ddl = $dest_ext_ddl."CREATE EXTERNAL WEB TABLE $dest_ext_table(\n";
+            $dest_ext_ddl = $dest_ext_ddl.qq{LIKE $dest_tableqq};
+            $dest_ext_ddl = $dest_ext_ddl."\n)EXECUTE E'sh /tmp/fifo/gpdbtransfercat.sh $SRC_GPHOME.$KEY.$SRC_USER.$base64_pass.$thread_index.$DEST_SEG_SIZE";
             $dest_ext_ddl = $dest_ext_ddl.($from_master ? ".M" : ".S");
             $dest_ext_ddl = $dest_ext_ddl.".\$GP_SEG_PORT.$SRC_DATABASE.$src_scma.$src_rel.$base64_lock.$ENCODING.$random.$COMPRESS.$base64_where'";
             if($from_master){
@@ -1603,7 +1603,7 @@ sub executeTransfer{
             }
             ($code,$value) = (0,"");
             if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
-                ($code,$value) = queryResult("DEST",qq{BEGIN;LOCK TABLE $dest_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;truncate table $dest_tableqq;END;},"CV");
+                ($code,$value) = queryResult("DEST",qq{BEGIN;LOCK TABLE $dest_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $dest_tableqq;END;},"CV");
             }elsif($NEED_DELETE){
                 ($code,$value) = queryResult("DEST",qq{BEGIN;LOCK TABLE $dest_tableqq IN EXCLUSIVE MODE NOWAIT;delete from $dest_tableqq}.$where.";END;","CV");
             }
@@ -1621,9 +1621,9 @@ sub executeTransfer{
                 my $app_name = qq{GPDBTRANSFER.$KEY.$thread_index};
                 my $clean_sql;
                 if($from_master){
-                    $clean_sql = qq{select pg_cancel_backend(procpid) from pg_stat_activity where application_name='$app_name';};
+                    $clean_sql = qq{SELECT pg_cancel_backend(procpid) FROM pg_stat_activity WHERE application_name = '$app_name';};
                 }else{
-                    $clean_sql = qq{select pg_cancel_backend(procpid) from (select (pg_stat_get_activity(NULL::integer)).* from gp_dist_random('gp_id')) t where application_name='$app_name';};
+                    $clean_sql = qq{SELECT pg_cancel_backend(procpid) FROM (SELECT (pg_stat_get_activity(NULL::integer)).* FROM gp_dist_random('gp_id')) t WHERE application_name = '$app_name';};
                 }
                 @stat_msg = ("FAILED","$from_to_info [$code],[$value]");
                 ($code,$value) = queryResult("SRC",$clean_sql,"CV");
@@ -1636,7 +1636,7 @@ GOTO_NEXT_TASK:
         $MSG_QUEUE->enqueue(\@stat_msg);
         $task = $TASK_QUEUE->dequeue();
     }
-    ($code,$value) = queryResult("DEST","drop external table if exists $dest_ext_table;","CV");
+    ($code,$value) = queryResult("DEST","DROP EXTERNAL TABLE IF EXISTS $dest_ext_table;","CV");
     $MSG_QUEUE->enqueue(undef);
 }
 sub executeMessage{
