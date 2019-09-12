@@ -22,25 +22,28 @@ my ($MIRROR_MODE_RING,$MIRROR_MODE_PAIR) = ("RING","PAIR");
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$MIRROR_MODE,$IGNORE_INIT,
     $IGNORE_HOSTS,$CORE_PATH,$EXPAND,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
-my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
+my ($CLUSTER_EXISTS,$INSTALL_VERSION,$MAJOR_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
-        "default_statistics_target"                   => "-v 15 -m 15",
-        "gp_autostats_mode_in_functions"              => "-v ON_NO_STATS -m ON_NO_STATS",
-        "gp_create_table_random_default_distribution" => "-v on -m on",
-        "gp_enable_relsize_collection"                => "-v on -m on",
-        "gp_max_local_distributed_cache"              => "-v 1048576",
-        "gp_max_partition_level"                      => "-v 1 -m 1",
-        "gp_segment_connect_timeout"                  => "-v 180 -m 180",
-        "gp_workfile_limit_per_query"                 => "-v 134217728 -m 134217728",
-        "gp_workfile_limit_per_segment"               => "-v 134217728 -m 134217728",
-        "gp_workfile_compress_algorithm"              => "-v zlib",
-        "log_min_duration_statement"                  => "-v 30000 -m 30000",
-        "log_timezone"                                => "-v HONGKONG -m HONGKONG",
-        "max_appendonly_tables"                       => "-v 50000 -m 50000",
-        "max_fsm_pages"                               => "-v 2000000 -m 2000000",
-        "max_fsm_relations"                           => "-v 30000 -m 30000",
-        "writable_external_table_bufsize"             => "-v 16MB -m 16MB",
+        "default_statistics_target"                   => [("4+","-v 15 -m 15")],
+        "from_collapse_limit"                         => [("4+","-v 12 -m 12")],
+        "gp_autostats_mode_in_functions"              => [("4+","-v ON_NO_STATS -m ON_NO_STATS")],
+        "gp_create_table_random_default_distribution" => [("4+","-v on -m on")],
+        "gp_enable_relsize_collection"                => [("4+","-v on -m on")],
+        "gp_max_local_distributed_cache"              => [("4+","-v 1048576")],
+        "gp_max_partition_level"                      => [("4+","-v 1 -m 1")],
+        "gp_segment_connect_timeout"                  => [("4+","-v 180 -m 180")],
+        "gp_workfile_compress_algorithm"              => [("5-","-v zlib -m zlib")],
+        "gp_workfile_compression"                     => [("6+","-v on -m on")],
+        "gp_workfile_limit_per_query"                 => [("4+","-v 134217728 -m 134217728")],
+        "gp_workfile_limit_per_segment"               => [("4+","-v 134217728 -m 134217728")],
+        "join_collapse_limit"                         => [("4+","-v 12 -m 12")],
+        "log_min_duration_statement"                  => [("4+","-v 30000 -m 30000")],
+        "log_timezone"                                => [("4+","-v HONGKONG -m HONGKONG")],
+        "max_appendonly_tables"                       => [("4+","-v 50000 -m 50000")],
+        "max_fsm_pages"                               => [("5-","-v 2000000 -m 2000000")],
+        "max_fsm_relations"                           => [("5-","-v 30000 -m 30000")],
+        "writable_external_table_bufsize"             => [("4+","-v 16MB -m 16MB")],
 );
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
 my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
@@ -171,7 +174,7 @@ OPTIONS
 
 [--user-id <userid for OS>]
 
-  Use this id for OS user (for gp admin user), if not specify, use 500 for default.
+  Use this id for OS user (for gp admin user), if not specify, use 300 for default.
 
 [--segs-per-disk <number>]
 
@@ -254,7 +257,7 @@ OPTIONS
   mas-dev         = /data
   seg-dev         = /data1
   seg-dev         = /data2
-  user-id         = 500
+  user-id         = 300
   segs-per-disk   = 2
   prefix          = gpseg
   mas-port        = 5432
@@ -509,7 +512,7 @@ sub checkOption{
         @SEGMENT_DEV = sort {$a cmp $b} @SEGMENT_DEV;
     }
     if($USER_ID eq ""){
-        $USER_ID = 500;
+        $USER_ID = 300;
         logMessage("NOTICE","Not specify --user-id, use default value: $USER_ID");
     }elsif(int($USER_ID) ne $USER_ID){
         errorMessage("Please specify parameter a integer value: --user-id");
@@ -977,6 +980,7 @@ sub installBinary{
     if($INSTALL_VERSION eq ""){
         errorMessage("Install greenplum software failed ...");
     }
+    $MAJOR_VERSION = int($INSTALL_VERSION);
     system(qq{sudo sed 's/^\\s*MASTER_IPV6_LOCAL_ADDRESS_ALL.*/                MASTER_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/gpinitsystem});
     system(qq{sudo sed 's/^\\s*SEGMENT_IPV6_LOCAL_ADDRESS_ALL.*/        SEGMENT_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/lib/gpcreateseg.sh});
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
@@ -1012,13 +1016,13 @@ sub createSegmentFile{
     $all_segs_install_handle->autoflush(1);
     for my $exists_ip(keys %EXISTS_IP_HASH){
         my $exists_host = $EXISTS_IP_HASH{$exists_ip};
-        print $all_hosts_handle $exists_host."\n";
         print $all_hosts_handle $exists_ip."\n";
+        print $all_hosts_handle $exists_host."\n";
     }
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$cur_ring,$cur_order) = @$config;
-        print $all_hosts_handle $hostname."\n";
         print $all_hosts_handle $ip."\n";
+        print $all_hosts_handle $hostname."\n";
         if($role =~ /^SE/){
             print $all_segs_install_handle $hostname."\n";
         }
@@ -1087,6 +1091,11 @@ sub getPrimaryConfig{
     $query = $query.qq{where c.dbid = e.fsedbid\n};
     $query = $query.qq{and e.fsefsoid = (select oid from pg_filespace where fsname = 'pg_system')\n};
     $query = $query.qq{and c.preferred_role = 'p' and c.content > -1 order by 1,2};
+    if($MAJOR_VERSION > 5){
+        $query = qq{select hostname,content,datadir,port\n};
+        $query = $query.qq{from gp_segment_configuration c\n};
+        $query = $query.qq{where c.preferred_role = 'p' and c.content > -1 order by 1,2};
+    }
     my @primary_config_list = queryResult($query);
     my %primary_config_map = ();
     for my $config(@primary_config_list){
@@ -1137,7 +1146,9 @@ sub createMirrorConfigFile{
         errorMessage("Can't open file: $file_name");
     }
     $file_handle->autoflush(1);
-    print $file_handle "filespaceOrder=\n";
+    if($MAJOR_VERSION < 6){
+        print $file_handle "filespaceOrder=\n";
+    }
     for my $config(@mirror_config_list){
         print $file_handle $config."\n";
     }
@@ -1161,6 +1172,9 @@ sub prepareRingMirror{
                 my $m_hostname = $cur_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
                 my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                if($MAJOR_VERSION > 5){
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
             }
@@ -1187,6 +1201,9 @@ sub preparePairMirror{
                 my $m_hostname = $right_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
                 my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                if($MAJOR_VERSION > 5){
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
             }
@@ -1199,6 +1216,9 @@ sub preparePairMirror{
                 my $m_hostname = $left_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
                 my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                if($MAJOR_VERSION > 5){
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
             }
@@ -1219,9 +1239,9 @@ sub addMirror{
             errorMessage("Error($exit_code) occur when execute gpaddmirrors.");
         }
         for my $trys(1 .. 200){
-            sleep(3);
+            sleep(6);
             my $command = qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;psql -h 127.0.0.1 -U $GP_ADMIN_NAME -p $MASTER_PORT -d template1 -qtAXc};
-            $command = $command.qq{ "select count(*) from gp_segment_configuration where mode <> 's';"};
+            $command = $command.qq{ "SELECT count(*) FROM gp_segment_configuration WHERE content > -1 AND mode <> 's';"};
             my $output = trim(readpipe($command));
             if($output eq "0"){
                 last;
@@ -1231,6 +1251,9 @@ sub addMirror{
     }
 }
 sub addGPFileSpace{
+    if($MAJOR_VERSION > 5){
+        return;
+    }
     if($IGNORE_INIT){
         logMessage("INFO","Ignore add filespace");
         return;
@@ -1293,7 +1316,7 @@ sub gpConfig{
         my ($name,$value) = split(/=/,$config,2);
         ($name,$value) = (lc(trim($name)),trim($value));
         if(! exists $gp_config_hash{$name}){
-            $gp_config_hash{$name} = $value;
+            $gp_config_hash{$name} = [("4+",$value)];
         }
     }
     if(! exists $gp_config_hash{"gp_vmem_protect_limit"}){
@@ -1319,7 +1342,7 @@ sub gpConfig{
         $mas_value = $mas_value < 8 ? 8192 : $mas_value * 1024;
         $seg_value = $seg_value < 8 ? 8192 : $seg_value * 1024;
         if($mas_value > 8192 && $seg_value > 8192){
-            $gp_config_hash{"gp_vmem_protect_limit"} = "-v $seg_value -m $mas_value";
+            $gp_config_hash{"gp_vmem_protect_limit"} = [("4+","-v $seg_value -m $mas_value")];
         }
     }
     for my $key(keys %DEFAULT_GPCONFIG){
@@ -1327,10 +1350,13 @@ sub gpConfig{
             $gp_config_hash{$key} = $DEFAULT_GPCONFIG{$key};
         }
     }
-    for my $key(keys %gp_config_hash){
+    for my $key(sort keys %gp_config_hash){
+        my ($version,$config) = @{$gp_config_hash{$key}};
         my $gpconfig = qq{sudo su - $GP_ADMIN_NAME <<END_OF_COMMAND\n. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1\n};
-        $gpconfig = $gpconfig.qq{gpconfig -c $key }.$gp_config_hash{$key}.qq{\nEND_OF_COMMAND};
-        system($gpconfig);
+        if(($version =~ /\+$/ && int($version) <= $MAJOR_VERSION) || ($version =~ /-$/ && int($version) >= $MAJOR_VERSION)){
+            $gpconfig = $gpconfig.qq{gpconfig -c $key }.$config.qq{\nEND_OF_COMMAND};
+            system($gpconfig);
+        }
     }
 }
 sub createExpandConfigFile{
@@ -1343,6 +1369,10 @@ sub createExpandConfigFile{
     $FILE_HANDLE->autoflush(1);
     print $FILE_HANDLE $expand_config;
     close $FILE_HANDLE;
+    if($MAJOR_VERSION > 5){
+        logMessage("INFO","Input config file for gpexpand is: $input_file");
+        return;
+    }
     my $input_file_fs = $input_file.".fs";
     if(!open($FILE_HANDLE,">",$input_file_fs)){
         errorMessage("Can't open file: $input_file_fs");
@@ -1370,13 +1400,23 @@ sub prepareExpandRing{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
-                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    if($MAJOR_VERSION > 5){
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                    }else{
+                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    }
+                    push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index + 1) % ($max_index + 1);
                         my $m_hostname = $cur_array[$mirror_position];
-                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
-                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        if($MAJOR_VERSION > 5){
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                        }else{
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        }
+                        push @mirror_config_list,$m_config;
                     }
                     ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
                 }
@@ -1408,13 +1448,23 @@ sub prepareExpandPair{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
-                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    if($MAJOR_VERSION > 5){
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                    }else{
+                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    }
+                    push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                         my $m_hostname = $right_array[$mirror_position];
-                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
-                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        if($MAJOR_VERSION > 5){
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                        }else{
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        }
+                        push @mirror_config_list,$m_config;
                     }
                     ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
                 }
@@ -1428,13 +1478,23 @@ sub prepareExpandPair{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    push @primary_config_list,"$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
-                    push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    if($MAJOR_VERSION > 5){
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                    }else{
+                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                    }
+                    push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                         my $m_hostname = $left_array[$mirror_position];
-                        push @mirror_config_list,"$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
-                        push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        if($MAJOR_VERSION > 5){
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                        }else{
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                        }
+                        push @mirror_config_list,$m_config;
                     }
                     ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
                 }
@@ -1477,7 +1537,9 @@ sub main{
             addMirror();
         }
     }
-    addGPFileSpace();
+    if($MAJOR_VERSION < 6){
+        addGPFileSpace();
+    }
     addStandby();
     gpConfig();
     if($EXPAND ne ""){
@@ -1581,6 +1643,11 @@ if [ $IS_RHEL == 1 ];then
 elif [ $IS_SuSE == 1 ];then
     yast runlevel delete service=boot.apparmor runlevels=B                        > /dev/null 2>&1
 fi
+##################################################################################
+if [ -f /etc/systemd/logind.conf ];then
+    sed -e s/.*RemoveIPC.*/RemoveIPC=no/i -i /etc/systemd/logind.conf
+    systemctl restart systemd-logind.service                                      > /dev/null 2>&1
+fi
 ##################################################################################HOSTNAME_CONFIG_START
 hostname $HSNM
 if [ -f /etc/sysconfig/network ];then
@@ -1660,7 +1727,7 @@ echo 'for i in /dev/sd*;do blockdev --setra 16384 $i;done'                >> $lo
 echo 'for i in /sys/block/sd*/queue/scheduler;do echo deadline > $i;done' >> $localfile
 echo 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'           >> $localfile
 echo '####GP_END'                                                         >> $localfile
-sh $localfile                                                                     > /dev/null 2>&1
+sed -n "/^####GP_BEGIN/,/^####GP_END/p" $localfile|bash                           > /dev/null 2>&1
 ##################################################################################
 sed s/.*MaxStartups.*/'MaxStartups 400:30:500'/ -i /etc/ssh/sshd_config
 if [ $IS_RHEL == 1 ];then
