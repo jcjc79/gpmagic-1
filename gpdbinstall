@@ -981,6 +981,8 @@ sub installBinary{
         errorMessage("Install greenplum software failed ...");
     }
     $MAJOR_VERSION = int($INSTALL_VERSION);
+    system(qq{sed /LD_PRELOAD/d -i /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh});
+    system(qq{echo 'export LD_PRELOAD=/lib64/libz.so.1 ps' >> /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh});
     system(qq{sudo sed 's/^\\s*MASTER_IPV6_LOCAL_ADDRESS_ALL.*/                MASTER_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/gpinitsystem});
     system(qq{sudo sed 's/^\\s*SEGMENT_IPV6_LOCAL_ADDRESS_ALL.*/        SEGMENT_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/lib/gpcreateseg.sh});
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
