@@ -26,7 +26,7 @@ my ($CLUSTER_EXISTS,$INSTALL_VERSION,$MAJOR_VERSION,$CAN_USE_EXPECT,$CURRENT_USE
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
         "default_statistics_target"                   => [("4+","-v 15 -m 15")],
-        "from_collapse_limit"                         => [("4+","-v 12 -m 12")],
+        "from_collapse_limit"                         => [("4+","-v 10 -m 10")],
         "gp_autostats_mode_in_functions"              => [("4+","-v ON_NO_STATS -m ON_NO_STATS")],
         "gp_create_table_random_default_distribution" => [("4+","-v on -m on")],
         "gp_enable_relsize_collection"                => [("4+","-v on -m on")],
@@ -37,7 +37,7 @@ my %DEFAULT_GPCONFIG = (
         "gp_workfile_compression"                     => [("6+","-v on -m on")],
         "gp_workfile_limit_per_query"                 => [("4+","-v 134217728 -m 134217728")],
         "gp_workfile_limit_per_segment"               => [("4+","-v 134217728 -m 134217728")],
-        "join_collapse_limit"                         => [("4+","-v 12 -m 12")],
+        "join_collapse_limit"                         => [("4+","-v 10 -m 10")],
         "log_min_duration_statement"                  => [("4+","-v 30000 -m 30000")],
         "log_timezone"                                => [("4+","-v HONGKONG -m HONGKONG")],
         "max_appendonly_tables"                       => [("4+","-v 50000 -m 50000")],
