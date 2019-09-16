@@ -1058,7 +1058,7 @@ sub initGpSystem{
     push @init_config,qq{ENCODING=UNICODE};
     push @init_config,qq{SEG_PREFIX=$PREFIX};
     push @init_config,qq{HEAP_CHECKSUM=on};
-    push @init_config,qq{QD_PRIMARY_ARRAY=$m_hostname~$MASTER_PORT~$MASTER_DEV/master/default/$PREFIX-1~1~-1~0};
+    push @init_config,qq{QD_PRIMARY_ARRAY=$m_hostname~$MASTER_PORT~$MASTER_DEV/default/$PREFIX-1~1~-1~0};
     push @init_config,qq{declare -a PRIMARY_ARRAY=(};
     my ($content_index,$dbid_index) = (0,2);
     for my $config(sort {$a->[1] <=> $b->[1]} @SEG_INSTALL_CONFIG_ARRAY){
@@ -1066,7 +1066,7 @@ sub initGpSystem{
         my $port_index = $PORT_BASE;
         for my $path(@SEGMENT_DEV){
             for my $idx(1 .. $SEGS_PER_DISK){
-                push @init_config,qq{$hostname~$port_index~$path/primary/default/$PREFIX}.$content_index.qq{~}.$dbid_index.qq{~}.$content_index.qq{~0};
+                push @init_config,qq{$hostname~$port_index~$path/default/$PREFIX}.$content_index.qq{~}.$dbid_index.qq{~}.$content_index.qq{~0};
                 ($content_index,$dbid_index,$port_index) = ($content_index + 1,$dbid_index + 1,$port_index + 1);
             }
         }
@@ -1173,9 +1173,9 @@ sub prepareRingMirror{
                 my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index + 1) % ($max_index + 1);
                 my $m_hostname = $cur_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
-                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/default/$PREFIX"."$p_content";
                 if($MAJOR_VERSION > 5){
-                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/default/$PREFIX"."$p_content";
                 }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
@@ -1202,9 +1202,9 @@ sub preparePairMirror{
                 my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                 my $m_hostname = $right_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
-                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/default/$PREFIX"."$p_content";
                 if($MAJOR_VERSION > 5){
-                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/default/$PREFIX"."$p_content";
                 }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
@@ -1217,9 +1217,9 @@ sub preparePairMirror{
                 my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                 my $m_hostname = $left_array[$mirror_position];
                 my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
-                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/$PREFIX"."$p_content";
+                my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/default/$PREFIX"."$p_content";
                 if($MAJOR_VERSION > 5){
-                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/mirror/default/$PREFIX"."$p_content";
+                    $m_config = "$p_content|$m_hostname|$m_port|$p_location/default/$PREFIX"."$p_content";
                 }
                 push @mirror_config_list,$m_config;
                 $primary_index += 1;
@@ -1402,21 +1402,21 @@ sub prepareExpandRing{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
                     if($MAJOR_VERSION > 5){
-                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
                     }else{
-                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                        push @primary_filespace_list,$primary_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                     }
                     push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index + 1) % ($max_index + 1);
                         my $m_hostname = $cur_array[$mirror_position];
-                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
                         if($MAJOR_VERSION > 5){
-                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
                         }else{
-                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                         }
                         push @mirror_config_list,$m_config;
                     }
@@ -1450,21 +1450,21 @@ sub prepareExpandPair{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
                     if($MAJOR_VERSION > 5){
-                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
                     }else{
-                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                        push @primary_filespace_list,$primary_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                     }
                     push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                         my $m_hostname = $right_array[$mirror_position];
-                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
                         if($MAJOR_VERSION > 5){
-                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
                         }else{
-                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                         }
                         push @mirror_config_list,$m_config;
                     }
@@ -1480,21 +1480,21 @@ sub prepareExpandPair{
             for my $path(@SEGMENT_DEV){
                 for my $in_disk_index(1 .. $SEGS_PER_DISK){
                     my ($primary_port,$primary_rep_port,$mirror_port,$mirror_rep_port) = ($port_index,$port_index + 1000,$port_index + 10000,$port_index + 11000);
-                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/primary/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
+                    my $p_config = "$pri_hostname:$pri_hostname:$primary_port:$path/default/$PREFIX"."$content_index:$primary_dbid_index:$content_index:p:$primary_rep_port";
                     if($MAJOR_VERSION > 5){
-                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/primary/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
+                        $p_config = "$pri_hostname|$pri_hostname|$primary_port|$path/default/$PREFIX"."$content_index|$primary_dbid_index|$content_index|p";
                     }else{
-                        push @primary_filespace_list,$primary_dbid_index.":$path/primary/gpfs/$PREFIX"."$content_index";
+                        push @primary_filespace_list,$primary_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                     }
                     push @primary_config_list,$p_config;
                     if($EXISTS_MIRROR){
                         my $mirror_position = ($primary_index % $MIRROR_SPLIT + $index) % $MIRROR_SPLIT + int($index / $MIRROR_SPLIT) * $MIRROR_SPLIT;
                         my $m_hostname = $left_array[$mirror_position];
-                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/mirror/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
+                        my $m_config = "$m_hostname:$m_hostname:$mirror_port:$path/default/$PREFIX"."$content_index:$mirror_dbid_index:$content_index:m:$mirror_rep_port";
                         if($MAJOR_VERSION > 5){
-                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/mirror/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
+                            $m_config = "$m_hostname|$m_hostname|$mirror_port|$path/default/$PREFIX"."$content_index|$mirror_dbid_index|$content_index|m";
                         }else{
-                            push @mirror_filespace_list,$mirror_dbid_index.":$path/mirror/gpfs/$PREFIX"."$content_index";
+                            push @mirror_filespace_list,$mirror_dbid_index.":$path/gpfs/$PREFIX"."$content_index";
                         }
                         push @mirror_config_list,$m_config;
                     }
@@ -1783,11 +1783,11 @@ mount -a                                                                        
 array=($Directorys)
 for path in ${array[@]};do
     if [ "$MODE" == "M" ];then
-        mkdir -p $path/master/{default,gpfs}                                      > /dev/null 2>&1
-        chown -R $USNM. $path/master                                              > /dev/null 2>&1
+        mkdir -p $path/{default,gpfs}                                             > /dev/null 2>&1
+        chown -R $USNM. $path/{default,gpfs}                                      > /dev/null 2>&1
     elif [ "$MODE" == "S" ];then
-        mkdir -p $path/{primary,mirror}/{default,gpfs}                            > /dev/null 2>&1
-        chown -R $USNM. $path/{primary,mirror}                                    > /dev/null 2>&1
+        mkdir -p $path/{default,gpfs}                                             > /dev/null 2>&1
+        chown -R $USNM. $path/{default,gpfs}                                      > /dev/null 2>&1
     fi
 done
 ##################################################################################
@@ -1796,7 +1796,7 @@ if [ "$MODE" == "M" ];then
     masterpath=${array[0]}
     sed -e /greenplum_path.sh/d -e /MASTER_DATA_DIRECTORY/d -e /PGPORT/d   -i /home/$USNM/.bashrc
     echo '. /usr/local/greenplum-db/greenplum_path.sh'                     >> /home/$USNM/.bashrc
-    echo "export MASTER_DATA_DIRECTORY=$masterpath/master/default/GPSEG-1" >> /home/$USNM/.bashrc
+    echo "export MASTER_DATA_DIRECTORY=$masterpath/default/GPSEG-1"        >> /home/$USNM/.bashrc
     echo "export PGPORT=$MSPT"                                             >> /home/$USNM/.bashrc
 fi
 ##################################################################################
