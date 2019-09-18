@@ -178,7 +178,10 @@ my $SQL_GET_TABLE_CHECK = q{SELECT conrelid,gp_toolkit.mcencode(conname),gp_tool
 FROM pg_constraint
 WHERE contype = 'c' AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = conrelid) ORDER BY 1,2;};
 my $SQL_GET_TABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,reltablespace,relnatts,
-    relhasoids,relhassubclass,gp_toolkit.mcencode(relacl),array_to_string(reloptions,',')
+    relhasoids,relhassubclass,gp_toolkit.mcencode(relacl),array_to_string(reloptions,','),false as unlogged
+FROM pg_class WHERE (relnamespace >= 16384 OR relnamespace = 2200) AND relkind = 'r' AND relstorage <> 'x';};
+my $SQL_GET_TABLE_V6 = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,reltablespace,relnatts,
+    relhasoids,relhassubclass,gp_toolkit.mcencode(relacl),array_to_string(reloptions,','),relpersistence = 'u' as unlogged
 FROM pg_class WHERE (relnamespace >= 16384 OR relnamespace = 2200) AND relkind = 'r' AND relstorage <> 'x';};
 my $SQL_GET_PARTITION_ORDER = qq{SELECT parrelid FROM pg_partition p, pg_partition_rule r WHERE p.oid = r.paroid GROUP BY 1 ORDER BY count(*) DESC;};
 my $SQL_GET_VIEW_DEPEND = q{SELECT v.oid void,t.oid toid,t.relkind kind
@@ -1010,11 +1013,16 @@ sub getDatabaseTablespace{
     }
 }
 sub getTableInformation{
-    my @result = queryResult($SQL_GET_TABLE);
+    my @result;
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_TABLE);
+    }else{
+        @result = queryResult($SQL_GET_TABLE_V6);
+    }
     for my $row(@result){
-        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @$row;
+        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$unlogged) = @$row;
         ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
-        $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions)];
+        $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$unlogged)];
     }
     @result = queryResult($SQL_GET_PARTITION_ORDER);
     my %temp_set = ();
@@ -1201,7 +1209,7 @@ sub getRelationAuth{
 sub outputTable{
     my $index = 0;
     for my $oid(@TABLE_PARTITIONS_ORDER_ARRAY){
-        my ($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
+        my ($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$unlogged) = @{$MAP_OF_TABLE{$oid}};
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
             next;
         }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
@@ -1231,7 +1239,7 @@ sub outputTable{
             push @attibute_array,$attr_sql;
         }
         my $distribution = $MAP_OF_DISTRIBUTION{$oid};
-        my $create = qq{CREATE TABLE $relnamespace.$relname(\n};
+        my $create = "CREATE ".($unlogged eq "t" ? "UNLOGGED " : "").qq{TABLE $relnamespace.$relname(\n};
         $create = $create.join(",\n",@attibute_array);
         $create = $create."\n)\n";
         $create = $create."WITH(OIDS=".("f" eq $relhasoids ? "FALSE" : "TRUE").("" eq $reloptions ? "" : ",".$reloptions).")\n";
