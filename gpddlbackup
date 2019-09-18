@@ -114,6 +114,12 @@ FROM pg_tablespace ts,pg_filespace fs
 WHERE ts.spcfsoid = fs.oid AND spcname not in('pg_global');#;
 my $SQL_GET_TABLESPACE_V6 = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
+    gp_toolkit.mcencode(CASE WHEN ts.oid < 16384 THEN NULL ELSE (
+        SELECT '''' || pg_tablespace_location(ts.oid) || ''' WITH(' || (
+            SELECT string_agg('content' || gp_segment_id || '=''' || tblspc_loc, E''', ' ORDER BY gp_segment_id)
+            FROM pg_catalog.gp_tablespace_location(ts.oid)
+            WHERE gp_segment_id >= 0) || ''')'
+    ) END) AS spclocation,
     gp_toolkit.mcencode(spcacl)
 FROM pg_tablespace ts
 WHERE spcname not in('pg_global');#;
@@ -563,10 +569,23 @@ sub outputTablespace{
     }else{
         @result = queryResult($SQL_GET_TABLESPACE_V6);
         for my $row(@result){
-            my ($oid,$spcname,$spcowner,$spcacl) = @$row;
-            ($spcname) = (quote(decode($spcname)));
+            my ($oid,$spcname,$spcowner,$spclocation,$spcacl) = @$row;
+            ($spcname,$spclocation) = (quote(decode($spcname)),decode($spclocation));
             $spcowner = $MAP_OF_ROLE{$spcowner};
             $MAP_OF_TABLESPACE{$oid} = $spcname;
+            if($spcname eq "pg_default"){
+                next;
+            }
+            outputTask(qq{CREATE TABLESPACE $spcname OWNER $spcowner LOCATION $spclocation;},\$index,$TAIL_TableSpace);
+            if("" ne $spcacl){
+                for my $option(split(/,/,$spcacl)){
+                    my ($role,$value) = split(/:/,$option,2);
+                    ($role,$value) = (decode($role),decode($value));
+                    $role = "PUBLIC" if "" eq $role;
+                    $value =~ s/\/.*$//;
+                    output("GRANT ALL ON TABLESPACE $spcname TO $role;");
+                }
+            }
         }
     }
     outputRegionEnd(\$index,$TAIL_TableSpace);
