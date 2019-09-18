@@ -97,17 +97,26 @@ SELECT rq.oid,gp_toolkit.mcencode(rq.rsqname),
 FROM pg_resqueue rq,pg_resourcetype rt,pg_resqueuecapability rc
 WHERE rq.oid = rc.resqueueid AND rc.restypid = rt.restypid
 ORDER BY 1,4;#;
-my $SQL_GET_ROLE= qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+my $SQL_GET_ROLE = qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),
    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
    rolcreaterexthdfs,rolcreatewexthdfs
 FROM pg_authid;#;
+my $SQL_GET_ROLE_V6 = qq#SELECT a.oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+   rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(setconfig),
+   rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd
+FROM pg_authid a LEFT JOIN pg_db_role_setting s ON a.oid = s.setrole;#;
 my $SQL_GET_EXTPROTOCOL = qq{SELECT ptcname,unnest(string_to_array(gp_toolkit.mcencode(ptcacl),',')) from pg_extprotocol;};
 my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
     gp_toolkit.mcencode(fsname),gp_toolkit.mcencode(spcacl)
 FROM pg_tablespace ts,pg_filespace fs
 WHERE ts.spcfsoid = fs.oid AND spcname not in('pg_global');#;
+my $SQL_GET_TABLESPACE_V6 = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
+    ts.spcowner,
+    gp_toolkit.mcencode(spcacl)
+FROM pg_tablespace ts
+WHERE spcname not in('pg_global');#;
 my $SQL_GET_AUTH_MEMBER = q#SELECT roleid,member,grantor,admin_option FROM pg_auth_members;#;
 my $SQL_GET_SCHEMA = qq#SELECT oid,gp_toolkit.mcencode(nspname),
     nspowner,
@@ -123,7 +132,8 @@ FROM pg_attribute
 WHERE attrelid >= 16384 AND attnum > 0 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = attrelid);};
 my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(pg_get_expr(adbin,adrelid)) FROM pg_attrdef
 WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = adrelid);};
-my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,',') FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
+my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,','),'' AS policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
+my $SQL_GET_DISTRIBUTION_V6 = q{SELECT localoid,array_to_string(distkey,','),policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
 my $SQL_GET_COMPTYPE = q#SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
 my $SQL_GET_ENUM = q#SELECT gp_toolkit.mcencode(typname),typnamespace,typowner,string_agg(gp_toolkit.mcencode(enumlabel),',' ORDER BY e.oid)
 FROM pg_type t,pg_enum e
@@ -138,6 +148,12 @@ my $SQL_GET_FUNCTION = qq#SELECT oid,gp_toolkit.mcencode(proname),pronamespace,p
     gp_toolkit.mcencode(prosrc),probin,gp_toolkit.mcencode(proacl),prodataaccess
 FROM pg_proc
 WHERE pronamespace >=16384 or pronamespace = 2200;#;
+my $SQL_GET_FUNCTION_V6 = qq#SELECT oid,gp_toolkit.mcencode(proname),pronamespace,proowner,prolang,proisagg,prosecdef,proisstrict,proretset,provolatile,pronargs,prorettype,proiswindow,
+    array_to_string(proargtypes,','),array_to_string(proallargtypes,','),array_to_string(proargmodes,','),gp_toolkit.mcencode(proargnames),
+    gp_toolkit.mcencode(prosrc),probin,gp_toolkit.mcencode(proacl),prodataaccess
+FROM pg_proc
+WHERE pronamespace >=16384 or pronamespace = 2200;#;
+
 my $SQL_GET_FUNCTION_ARGDEF = qq#SELECT oid,pronargs,gp_toolkit.mcencode(pg_get_expr(proargdefaults,'pg_catalog.pg_class'::regclass)),pronargdefaults
 FROM pg_proc
 WHERE pronamespace >=16384 or pronamespace = 2200 AND pronargdefaults > 0;
@@ -166,13 +182,14 @@ WHERE dv.objid = dt.objid AND dv.refobjid <> dt.refobjid
     AND t.oid = dt.refobjid AND t.relnamespace = nt.oid AND (nt.oid > 16384 OR nt.nspname = 'public') AND dt.refclassid = 1259
     AND v.relkind = 'v' AND dv.deptype = 'i' AND nv.nspname NOT LIKE E'pg\_temp\_%' AND nv.nspname NOT LIKE E'pg\_toast\_temp\_%'
     GROUP BY 1,2,3;};
-
-my $SQL_GET_EXTTABLE_TYPE = q{SELECT count(*) FROM pg_attribute WHERE attrelid = (SELECT oid FROM pg_class WHERE relname = 'pg_exttable' and relnamespace = 11) AND attname = 'location';};
-my $SQL_GET_EXTTABLE_FMT_1 = qq{SELECT reloid,gp_toolkit.mcencode(location),fmttype,gp_toolkit.mcencode(fmtopts),
+my $SQL_GET_EXTTABLE_FMT_V4 = qq{SELECT reloid,gp_toolkit.mcencode(location),fmttype,gp_toolkit.mcencode(fmtopts),
 gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
 FROM pg_exttable;};
-my $SQL_GET_EXTTABLE_FMT_2 = qq{SELECT reloid,gp_toolkit.mcencode(coalesce(urilocation,execlocation)),fmttype,gp_toolkit.mcencode(fmtopts),
+my $SQL_GET_EXTTABLE_FMT_V5 = qq{SELECT reloid,gp_toolkit.mcencode(coalesce(urilocation,execlocation)),fmttype,gp_toolkit.mcencode(fmtopts),
 gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
+FROM pg_exttable;};
+my $SQL_GET_EXTTABLE_FMT_V6 = qq{SELECT reloid,gp_toolkit.mcencode(coalesce(urilocation,execlocation)),fmttype,gp_toolkit.mcencode(fmtopts),
+gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,'' AS fmterrtbl,pg_encoding_to_char(encoding),writable
 FROM pg_exttable;};
 
 my $SQL_GET_EXTTABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts,
@@ -440,7 +457,7 @@ sub skipThisSchema{
 sub getVersion{
     my $versionString = queryResult("SELECT version();","Scalar");
     if($versionString =~ /Greenplum Database (\d)/){
-        $DATABASE_VERSION = $1;
+        $DATABASE_VERSION = int($1);
     }
 }
 sub getKeyWord{
@@ -504,11 +521,15 @@ sub outputResourceQueue{
     outputRegionEnd(\$index,$TAIL_ResourceQueue);
 }
 sub outputRole{
-    my @result = queryResult($SQL_GET_ROLE);
+    my @result;
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_ROLE);
+    }else{
+        @result = queryResult($SQL_GET_ROLE_V6);
+    }
     my $index = 0;
     for my $row(@result){
-        my ($oid,$rolname,$super,$inherit,$createrole,$createdb,$catupdate,$canlogin,$connlimit,$password,$validuntil,
-            $config,$resqueue,$rextgpfd,$rexthttp,$wextgpfd,$rexthdfs,$wexthdfs) = @$row;
+        my ($oid,$rolname) = @$row;
         my $rolname = quote(decode($rolname));
         outputTask(qq{CREATE ROLE $rolname;},\$index,$TAIL_ROLE);
         $MAP_OF_ROLE{$oid} = $rolname;
@@ -516,31 +537,47 @@ sub outputRole{
     outputRegionEnd(\$index,$TAIL_ROLE);
 }
 sub outputTablespace{
-    my @result = queryResult($SQL_GET_TABLESPACE);
+    my @result;
     my $index = 0;
-    for my $row(@result){
-        my ($oid,$spcname,$spcowner,$fsname,$spcacl) = @$row;
-        ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
-        $spcowner = $MAP_OF_ROLE{$spcowner};
-        $MAP_OF_TABLESPACE{$oid} = $spcname;
-        if($spcname eq "pg_default"){
-            next;
-        }
-        outputTask(qq{CREATE TABLESPACE $spcname OWNER $spcowner FILESPACE $fsname;},\$index,$TAIL_TableSpace);
-        if("" ne $spcacl){
-            for my $option(split(/,/,$spcacl)){
-                my ($role,$value) = split(/:/,$option,2);
-                ($role,$value) = (decode($role),decode($value));
-                $role = "PUBLIC" if "" eq $role;
-                $value =~ s/\/.*$//;
-                output("GRANT ALL ON TABLESPACE $spcname TO $role;");
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_TABLESPACE);
+        for my $row(@result){
+            my ($oid,$spcname,$spcowner,$fsname,$spcacl) = @$row;
+            ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
+            $spcowner = $MAP_OF_ROLE{$spcowner};
+            $MAP_OF_TABLESPACE{$oid} = $spcname;
+            if($spcname eq "pg_default"){
+                next;
             }
+            outputTask(qq{CREATE TABLESPACE $spcname OWNER $spcowner FILESPACE $fsname;},\$index,$TAIL_TableSpace);
+            if("" ne $spcacl){
+                for my $option(split(/,/,$spcacl)){
+                    my ($role,$value) = split(/:/,$option,2);
+                    ($role,$value) = (decode($role),decode($value));
+                    $role = "PUBLIC" if "" eq $role;
+                    $value =~ s/\/.*$//;
+                    output("GRANT ALL ON TABLESPACE $spcname TO $role;");
+                }
+            }
+        }
+    }else{
+        @result = queryResult($SQL_GET_TABLESPACE_V6);
+        for my $row(@result){
+            my ($oid,$spcname,$spcowner,$spcacl) = @$row;
+            ($spcname) = (quote(decode($spcname)));
+            $spcowner = $MAP_OF_ROLE{$spcowner};
+            $MAP_OF_TABLESPACE{$oid} = $spcname;
         }
     }
     outputRegionEnd(\$index,$TAIL_TableSpace);
 }
 sub outputRoleSetting{
-    my @result = queryResult($SQL_GET_ROLE);
+    my @result;
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_ROLE);
+    }else{
+        @result = queryResult($SQL_GET_ROLE_V6);
+    }
     my $index = 0;
     for my $row(@result){
         my ($oid,$rolname,$super,$inherit,$createrole,$createdb,$catupdate,$canlogin,$connlimit,$password,$validuntil,
@@ -678,9 +715,20 @@ sub getAttributeInformation{
         my $key = $adrelid."-".$adnum;
         $MAP_OF_ATTRDEF{$key} = $adsrc;
     }
-    @result = queryResult($SQL_GET_DISTRIBUTION);
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_DISTRIBUTION);
+    }else{
+        @result = queryResult($SQL_GET_DISTRIBUTION_V6);
+    }
     for my $row(@result){
-        my ($localoid,$attrnums) = @$row;
+        my ($localoid,$attrnums,$policytype) = @$row;
+        if("r" eq $policytype){
+            $MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED REPLICATED";
+            next;
+        }elsif("" eq $attrnums && "p" eq $policytype){
+            $MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED RANDOMLY";
+            next;
+        }
         my $attenough = 1;
         my @diskeys_array = ();
         if("" ne $attrnums){
@@ -695,7 +743,7 @@ sub getAttributeInformation{
             }
         }
         if($attenough){
-            $MAP_OF_DISTRIBUTION{$localoid} = join(",",@diskeys_array);
+            $MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED BY(".join(",",@diskeys_array).")";
         }
     }
 }
@@ -813,7 +861,12 @@ sub getFunctionArgDef{
     }
 }
 sub outputFunction{
-    my @result = queryResult($SQL_GET_FUNCTION);
+    my @result;
+    if($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_FUNCTION);
+    }else{
+        @result = queryResult($SQL_GET_FUNCTION_V6);
+    }
     my %volatile = ("s" => "STABLE","i" => "IMMUTABLE","v" => "VOLATILE");
     my $index = 0;
     for my $row(@result){
@@ -1166,7 +1219,7 @@ sub outputTable{
         if("0" ne $reltablespace){
             $create = $create."TABLESPACE ".$MAP_OF_TABLESPACE{$reltablespace}."\n";
         }
-        $create = $create."DISTRIBUTED ".("" eq $distribution ? "RANDOMLY" : "BY(".$distribution.")");
+        $create = $create.$distribution;
         if("t" eq $relhassubclass){
             $create = $create.getPartitionDefinition($oid,$relnamespace.".".$relname,$reloptions)."\n";
         }else{
@@ -1231,12 +1284,13 @@ sub formatFmtOpts{
     return trim($result);
 }
 sub getExtFormat{
-    my $check = queryResult($SQL_GET_EXTTABLE_TYPE,"Scalar");
     my @result;
-    if("1" eq $check){
-        @result = queryResult($SQL_GET_EXTTABLE_FMT_1);
+    if($DATABASE_VERSION < 5){
+        @result = queryResult($SQL_GET_EXTTABLE_FMT_V4);
+    }elsif($DATABASE_VERSION == 5){
+        @result = queryResult($SQL_GET_EXTTABLE_FMT_V5);
     }else{
-        @result = queryResult($SQL_GET_EXTTABLE_FMT_2);
+        @result = queryResult($SQL_GET_EXTTABLE_FMT_V6);
     }
     for my $row(@result){
         my ($reloid,$location,$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable) = @$row;
