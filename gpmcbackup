@@ -16,6 +16,7 @@ my ($TASK_QUEUE,$MSG_QUEUE);
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my (@TASK_THREAD,$MSG_THREAD,$LOCK_FILE_HANDLE);
 my (@MESSAGE_CACHE);
+my ($DATABASE_VERSION);
 my ($WRITE_TO_FILE) = (0);
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $MAIN_PID = substr("000000".$$,-6);
@@ -34,6 +35,13 @@ my $RANDOM_TABLE_RECORD_CHECK_SQL = qq{select (select count(*) from gp_dist_rand
         where c.dbid=f.fsedbid and c.status='u' and c.role='p' and c.content>=0 and f.fsefsoid=(select oid from pg_filespace where fsname='pg_system')
     ) md left join gp_toolkit.gp_segment_config sc
     on md.content=sc.database_content and md.fselocation=sc.database_path and md.port=sc.database_port;};
+my $RANDOM_TABLE_RECORD_CHECK_SQL_V6 = qq{select (select count(*) from gp_dist_random('gp_id')) segment_number,
+        count(*) all_number, count(*) filter(where sc.database_content is null) no_entry_number,
+        count(*) filter(where sc.database_content <> sc.gp_segment_id) wrong_number
+    from (select c.content,c.datadir,c.port,c.hostname from gp_segment_configuration c
+        where c.status = 'u' and c.role = 'p' and c.content >= 0
+    ) md left join gp_toolkit.gp_segment_config sc
+    on md.content = sc.database_content and md.datadir = sc.database_path and md.port = sc.database_port;};
 my $RANDOM_TABLE_RECORD_INSERT_SQL = q{drop external table if exists gp_toolkit.gp_segment_config_ext;
 create external web table gp_toolkit.gp_segment_config_ext(code text)
 execute 'C=`PGOPTIONS="-c gp_session_role=utility" PGPORT=$GP_SEG_PORT PGDATABASE=$GP_DATABASE psql -qtAXc "show gp_contentid"`;
@@ -151,18 +159,15 @@ my $HEAP_STAT_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order 
     select proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx from pg_proc
         where proname='gp_heap_table_stat' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit')
     )a,pg_type t where t.oid=a.typs[a.idx];};
-my $HEAP_STAT_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,varchar,varchar";
+my $HEAP_STAT_FUNCTION_ARG_CHECK_VALUE = "int4,varchar,int4,varchar,varchar";
 my $HEAP_STAT_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_heap_table_stat' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $HEAP_STAT_FUNCTION_SRC_CHECK_MD5 = "7d82957d164b092228b72969c4ffd168";
-my $HEAP_STAT_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_heap_table_stat(dbname varchar,port int,path varchar, tbname varchar) RETURNS SETOF varchar AS $$
+my $HEAP_STAT_FUNCTION_SRC_CHECK_MD5 = "424ee1fa4406bfaa4dab0e0404a05803";
+my $HEAP_STAT_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_heap_table_stat(version int,dbname varchar,port int,path varchar, tbname varchar) RETURNS SETOF varchar AS $$
 import os
 grid=tbname
 (scma,rel)=grid.split(".",1)
 def getSqlValue(sql):
-    cmd="""PGOPTIONS='-c gp_session_role=utility' psql -qtAXF '|' -v ON_ERROR_STOP=1 -d '%s' -p %s 2>&1 <<_END_OF_SQL
-%s
-_END_OF_SQL
-""" % (dbname,port,sql)
+    cmd="PGOPTIONS='-c gp_session_role=utility' psql -qtAXF '|' -v ON_ERROR_STOP=1 -d '"+dbname+"' -p "+str(port)+" 2>&1 <<_END_OF_SQL\n"+sql+"\n_END_OF_SQL\n"
     try:
         val=os.popen(cmd).read()
         return val.strip()
@@ -184,9 +189,12 @@ try:
     if relTSP=="1663":
         filePath=path + "/base/" + datOid + "/" + relFile
     else:
-        fspSql="""select n.location_1 from pg_tablespace t,pg_filespace f,gp_persistent_filespace_node n"""
-        fspSql+=""" where t.spcfsoid = f.oid and f.oid = n.filespace_oid and t.oid = %s""" % (relTSP)
-        filePath=getSqlValue(fspSql) + "/" + relTSP + "/" + datOid + "/" + relFile
+        if version>5:
+            filePath=path+"/pg_tblspc/"+relTSP+"/GPDB_*/"+datOid+"/"+relFile
+        else:
+            fspSql="""select n.location_1 from pg_tablespace t,pg_filespace f,gp_persistent_filespace_node n"""
+            fspSql+=""" where t.spcfsoid = f.oid and f.oid = n.filespace_oid and t.oid = %s""" % (relTSP)
+            filePath=getSqlValue(fspSql) + "/" + relTSP + "/" + datOid + "/" + relFile
     lsCmd="""if [ -f %s ];then ls --full-time %s;fi|awk '{print $6" "$7}'\n""" % (filePath,filePath)
     lsCmd+="""I=0;while true;do I=$((I+1));if [ -f %s.$I ];then ls --full-time %s.$I;else break;fi;done|awk '{print $6" "$7}'""" % (filePath,filePath)
     for tim in os.popen(lsCmd).read().strip().split("\n"):
@@ -202,7 +210,7 @@ my $BACKUP_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by 
     )a,pg_type t where t.oid=a.typs[a.idx];};
 my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar";
 my $BACKUP_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "0f470e9ce2d4023a288b1d6a118b1c6c";
+my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "88db7cc94198f92d27b47aae3dd93f7c";
 my $BACKUP_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_backup_function(dbname varchar,port int,content int,path varchar,
     tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar)returns bigint as $$
 import os,commands,time
@@ -229,12 +237,8 @@ try:
     copyq="""copy (select * from "%s"."%s"%s) to STDOUT;""" % (scma,rel,whr)
     if ""==whr:
         copyq="""copy "%s"."%s" to STDOUT;""" % (scma,rel)
-    cmd="""`set -o pipefail
-PGOPTIONS='-c gp_session_role=utility -c client_encoding=%s' psql -qtAX -v ON_ERROR_STOP=1 -d %s -p %s <<'_END_OF_SQL'|gzip %s> %s/%s.tmp
-%s
-_END_OF_SQL
-mv %s/%s.tmp %s/%s.gz
-`""" % (encoding,dbname,port,level,dirc,fname,copyq,dirc,fname,dirc,fname)
+    cmd="set -o pipefail\n"+"PGOPTIONS='-c gp_session_role=utility -c client_encoding="+encoding+"' psql -qtAX -v ON_ERROR_STOP=1 -d '"+dbname+"' -p "+str(port)
+    cmd+=" <<'_END_OF_SQL'|gzip "+str(level)+"> "+dirc+"/"+fname+".tmp\n"+copyq+"\n_END_OF_SQL\n"+"mv "+dirc+"/"+fname+".tmp"+" "+dirc+"/"+fname+".gz"
     printLog("BEGIN","")
     (cod,val)=commands.getstatusoutput(cmd)
     if len(val)>0:
@@ -669,6 +673,12 @@ sub checkOption{
     logMessage("INFO","Option values: --full $FULL_MODE --increment $INCREMENT --residue $RESIDUE --force-redo $FORCE_REDO");
     logMessage("INFO","Option values: -a $DATA_ONLY --truncate $NEED_TRUNCATE --no-error $NO_ERROR_TABLE --encoding $ENCODING --fast $FAST --parameter-file $PARAMETER_FILE");
 }
+sub getVersion{
+    my $versionString = queryResult("SELECT version();","Scalar");
+    if($versionString =~ /Greenplum Database (\d)/){
+        $DATABASE_VERSION = int($1);
+    }
+}
 sub checkFailover{
     my $fail_count = queryResult("select count(*) from gp_segment_configuration where role <> preferred_role;","Scalar");
     if($fail_count ne 0){
@@ -710,13 +720,17 @@ sub checkRandomTable{
         logMessage("NOTICE","No table gp_toolkit.gp_segment_config or need recreate it");
         queryResult($RANDOM_TABLE_DDL_SCRIPT);
     }
-    my @check_record_result = queryResult($RANDOM_TABLE_RECORD_CHECK_SQL);
+    my $random_table_record_check_sql = $RANDOM_TABLE_RECORD_CHECK_SQL;
+    if($DATABASE_VERSION > 5){
+        $random_table_record_check_sql = $RANDOM_TABLE_RECORD_CHECK_SQL_V6;
+    }
+    my @check_record_result = queryResult($random_table_record_check_sql);
     my ($segment_number,$all_number,$no_entry_number,$wrong_number) = @{$check_record_result[0]};
     if($segment_number ne $all_number || $no_entry_number ne 0 || $wrong_number ne 0){
         logMessage("INFO","Racord in gp_toolkit.gp_segment_config incorrect, reinsert");
         queryResult("truncate table gp_toolkit.gp_segment_config;");
         queryResult($RANDOM_TABLE_RECORD_INSERT_SQL);
-        @check_record_result = queryResult($RANDOM_TABLE_RECORD_CHECK_SQL);
+        @check_record_result = queryResult($random_table_record_check_sql);
         ($segment_number,$all_number,$no_entry_number,$wrong_number) = @{$check_record_result[0]};
         if($segment_number ne $all_number || $no_entry_number ne 0 || $wrong_number ne 0){
             errorMessage("Can not create right record in table table gp_toolkit.gp_segment_config");
@@ -1142,7 +1156,7 @@ sub getHeapLastStatFromCatalog{
         $all_index += 1;
         if($typ eq "h"){
             my $query_sql = qq{select '$scma','$rel',md5(string_agg(id||','||t, chr(10) order by id,t)) from(\n};
-            $query_sql = $query_sql.qq{select gp_segment_id id,gp_toolkit.gp_heap_table_stat('$DATABASE_NAME',database_port,database_path,'$scma.$rel') t\n};
+            $query_sql = $query_sql.qq{select gp_segment_id id,gp_toolkit.gp_heap_table_stat($DATABASE_VERSION,'$DATABASE_NAME',database_port,database_path,'$scma.$rel') t\n};
             $query_sql = $query_sql.qq{from gp_dist_random('gp_toolkit.gp_segment_config'))x};
             push @query_array,$query_sql;
             $heap_index += 1;
@@ -1342,6 +1356,7 @@ sub main{
     logMessage("INFO","Run command: ".$_[0]);
     system("unset PGOPTIONS");
     checkOption();
+    getVersion();
     checkFailover();
     checkConflictProcess();
     processDataDirectory();
