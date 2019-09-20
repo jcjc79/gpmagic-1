@@ -33,7 +33,7 @@ my ($LOG_FILE_DATE,$LOG_FILE_HANDLE,$HEALTH_STATUS_FILE_HANDLE,$HEALTH_CHECK_FIL
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $CMD_PATH = dirname(__FILE__);
 my $MAIN_PID = substr("000000".$$,-6);
-my $CMD_GERP = 'ps -o pid,comm -p $(pidof perl)'."|grep -w $CMD_NAME";
+my $CMD_GREP = "ps ax|grep -w $CMD_NAME|grep '\\-\\-md'|grep '\\-\\-mh'|grep '\\-\\-mp'|grep '\\-\\-sd'|grep '\\-\\-vip'|grep -vw grep";
 
 my $SQL_GET_STANDBY_STATUS = qq{SELECT
 (SELECT fselocation FROM pg_filespace_entry WHERE fsefsoid = 3052 AND fsedbid = (SELECT dbid FROM gp_segment_configuration WHERE content = -1 AND role = 'm')),
@@ -390,8 +390,12 @@ sub writeHealthStatus{
     closeHealthStatusFile();
 }
 sub checkMasterOrStandby{
+    my $master_data_directory = $ENV{"MASTER_DATA_DIRECTORY"};
+    if($START_ROLE eq "Standby"){
+        $master_data_directory = $HS_S_PGDD;
+    }
     my ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
-if [ -e "\$MASTER_DATA_DIRECTORY" ];then pg_controldata \$MASTER_DATA_DIRECTORY |grep 'Database cluster state'|awk -F ':' '{print \$NF}';else exit 1;fi
+if [ -e "$master_data_directory" ];then pg_controldata $master_data_directory|grep 'Database cluster state'|awk -F ':' '{print \$NF}';else exit 1;fi
 END_OF_COMMAND));
     if($code == 0){
         if($output eq "in standby mode"){
@@ -407,7 +411,7 @@ END_OF_COMMAND));
         return $CURRENT_ROLE;
     }
     ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
-if [ -e "\$MASTER_DATA_DIRECTORY" ];then pg_controldata \$MASTER_DATA_DIRECTORY |grep 'Catalog version number'|awk -F ':' '{print \$NF}';else exit 1;fi
+if [ -e "$master_data_directory" ];then pg_controldata $master_data_directory|grep 'Catalog version number'|awk -F ':' '{print \$NF}';else exit 1;fi
 END_OF_COMMAND));
     if($code == 0){
         $DATABASE_VERSION = int($output) >= 301705051 ? int($output) >= 301908232 ? 6 : 5 : 4;
@@ -537,7 +541,7 @@ sub checkStandbyProcess{
         logMessage("INFO","Standby is unconfigured");
         return;
     }
-    my ($code,$procpid) = executeCommand(qq{ssh $HS_S_HSNM -T "$CMD_GERP|head -n 1"|}.q(awk '{print $1}'));
+    my ($code,$procpid) = executeCommand(qq{et -o pipefail;ssh $HS_S_HSNM -T "$CMD_GREP|head -n 1"|}.q(awk '{print $1}'));
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
             logMessage("INFO","Standby exists residual process");
@@ -907,7 +911,7 @@ sub startProcess{
     if($OPR_STOP || $OPR_STATUS){
         return;
     }
-    my ($code,$procpid) = executeCommand(qq($CMD_GERP|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($code,$procpid) = executeCommand(qq($CMD_GREP|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($procpid ne "" && $START_ROLE ne "Master"){
         errorMessage("Process exists with process id: $procpid");
     }
@@ -920,7 +924,7 @@ sub startProcess{
     $start = $start.qq{ --resource '$HS_REOURCE'}.($HS_ENABLE_RECOVER ? " --recover" : "").($HS_ENABLE_REBALANCE ? " --rebalance" : "").qq{ > /dev/null 2>&1 &};
     executeCommand($start);
     sleep($HEALTH_CHECK_SLEEP);
-    ($code,$procpid) = executeCommand(qq($CMD_GERP|grep -vw $$|head -n 1|awk '{print \$1}'));
+    ($code,$procpid) = executeCommand(qq($CMD_GREP|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($procpid ne ""){
         logMessage("INFO","Start process success with process id: $procpid");
         exitMain(0);
@@ -933,13 +937,13 @@ sub stopProcess{
         return;
     }
     readHealthStatus();
-    my ($m_code,$m_procpid) = executeCommand(qq($CMD_GERP|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($m_code,$m_procpid) = executeCommand(qq($CMD_GREP|grep -vw $$|head -n 1|awk '{print \$1}'));
     if($m_procpid eq ""){
         logMessage("WARN","No process running currently");
     }
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
         stopResource($HS_S_HSNM);
-        my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GERP|head -n 1"|awk '{print \$1}'));
+        my ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GREP|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             logMessage("INFO","Stop process id on standby: $procpid");
             executeCommand(qq{ssh $HS_S_HSNM -T "sudo kill -9 $procpid" 2>&1});
@@ -956,7 +960,7 @@ sub getStatus{
         return;
     }
     readHealthStatus();
-    my ($code,$procpid) = executeCommand(qq($CMD_GERP|grep -vw $$|head -n 1|awk '{print \$1}'));
+    my ($code,$procpid) = executeCommand(qq($CMD_GREP|grep -vw $$|head -n 1|awk '{print \$1}'));
     my $info1 = "INFO";
     if($procpid ne ""){
         $HS_PID = $procpid;
@@ -966,7 +970,7 @@ sub getStatus{
     }
     my ($standby_procpid,$info2) = ("ERROR (Not found process id, may not be running)","WARN");
     if($HS_S_STAT ne $STANDBY_STATUS_UNCONFIGUED){
-        ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GERP|head -n 1"|awk '{print \$1}'));
+        ($code,$procpid) = executeCommand(qq(ssh $HS_S_HSNM -T "$CMD_GREP|head -n 1"|awk '{print \$1}'));
         if($procpid ne ""){
             ($standby_procpid,$info2) = ($procpid,"INFO");
         }
