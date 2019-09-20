@@ -541,7 +541,7 @@ sub checkStandbyProcess{
         logMessage("INFO","Standby is unconfigured");
         return;
     }
-    my ($code,$procpid) = executeCommand(qq{et -o pipefail;ssh $HS_S_HSNM -T "$CMD_GREP|head -n 1"|}.q(awk '{print $1}'));
+    my ($code,$procpid) = executeCommand(qq{set -o pipefail;ssh $HS_S_HSNM -T "$CMD_GREP|head -n 1"|}.q(awk '{print $1}'));
     if($code == 0){
         if($FIRST_CHECK_STANDBY_PROCESS && $procpid ne ""){
             logMessage("INFO","Standby exists residual process");
