@@ -1,0 +1,276 @@
+#!/usr/bin/perl
+use threads;
+use MIME::Base64;
+use File::Basename;
+use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
+use POSIX;
+use strict;
+
+my $MAIN_PID = substr("000000".$$,-6);
+(my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
+if($ENV{PATH} !~ "/sbin"){
+    $ENV{PATH}=$ENV{PATH}.":/sbin";
+}
+my @NEED_COMMAND = ("expect","ssh","ssh-keygen","scp","ssh-copy-id");
+
+my (@HOSTS_CONFIG,$HOSTS_FILE,$PASSWORD,$IS_HELP);
+my ($CURRENT_USER_NAME,%PASSWORD_HASH);
+my ($ssh,$scp,$sshcopyid) = ("ssh -o NumberOfPasswordPrompts=1","scp -o NumberOfPasswordPrompts=1","ssh-copy-id -o NumberOfPasswordPrompts=1");
+
+my $HELP_MESSAGE = q{COMMAND NAME: $CMD_NAME
+Exchanges SSH public keys between hosts.
+
+Developed by Miao Chen
+
+Work Email:
+michen\@pivotal.io
+Private Email:
+miaochen\@mail.ustc.edu.cn
+************************************************************************************************
+SYNOPSIS
+************************************************************************************************
+$CMD_NAME -h [[username@]hostname [-h [[username@]hostname] ...]
+  [-f hostfile]
+  [-W password]
+  [--help]
+*****************************************************
+OPTIONS
+*****************************************************
+-h <hostname>
+
+  Specifie a host name or address that will exchange the SSH key.
+  You can specify username like:
+
+  -h gpadmin@sdw001
+
+  The default user name is current user.
+
+-f <hostfile>
+
+  The location and name of file containing list of host name or address that will exchange the SSH key.
+  You can specify username like:
+
+  [gpadmin@]mdw001
+  [gpadmin@]mdw002
+  [gpadmin@]sdw001
+  [gpadmin@]sdw002
+
+  The default user name is current user.
+
+-W <password>
+
+  Specifie the defualt password for echange SSH key.
+  If all the hosts use the same password with the default value, command will not prompt inputting password.
+  If the defaule password not apply to all the hosts, command will prompt inputting password when authentication failed.
+
+  eg.:
+
+  -W gpadmin
+
+--help
+
+  Displays the online help.
+};
+
+sub trim{
+    my ($string) = @_;
+    $string =~ s/(^\s+|\s+$)//g;
+    return $string;
+}
+sub encode{
+    my ($string) = @_;
+    my $encode = encode_base64($string);
+    $encode =~ s/\n//g;
+    return $encode;
+}
+sub logMessage{
+    my ($flag,$message) = @_;
+    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
+    $message = "$time_flag-[$flag]-:$message\n";
+    if($flag eq "ERROR"){
+        print STDERR $message;
+    }else{
+        print STDOUT $message;
+    }
+    return $message;
+}
+sub errorMessage{
+    my ($message) = @_;
+    logMessage("ERROR",$message);
+    print "Usage: $CMD_NAME [-h|--help] [options]\n";
+    exit 1;
+}
+sub readLineFromFile{
+    my ($file_path) = @_;
+    if(!-e $file_path){
+        errorMessage("No file exists named: $file_path");
+    }
+    if(!open(FILE,"<",$file_path)){
+        errorMessage("Can't open file: $file_path");
+    }
+    my @line_list = ();
+    while(my $line = <FILE>){
+        $line = trim($line);
+        if(!($line =~ /^#/) && $line ne ""){
+            push @line_list,$line;
+        }
+    }
+    close FILE;
+    return @line_list;
+}
+sub executeWithExpect{
+    my ($command,$expect_eof) = @_;
+    my $expect = "expect 2>&1 <<'END_OF_EXPECT'"."\n";
+    $expect = $expect.'spawn '.$command."\n";
+    $expect = $expect.'set timeout 3'."\n";
+    my $para_size = @_;
+    for my $index(2 .. $para_size - 1){
+        my $match_send_list = $_[$index];
+        $expect = $expect.'expect {'."\n";
+        for my $match_send(@$match_send_list){
+            my ($match,$send,$continue) = @$match_send;
+            $expect = $expect.'    "'.$match.'" { send "'.$send.'\r"'.($continue ? '; exp_continue ' : '').' }'."\n";
+        }
+        $expect = $expect.'}'."\n";
+    }
+    if($expect_eof){
+        $expect = $expect.'expect eof {  }'."\n";
+    }
+    $expect = $expect.'catch wait exitcode'."\n";
+    $expect = $expect.'exit [lindex $exitcode 3]'."\n";
+    $expect = $expect.'END_OF_EXPECT'."\n";
+    my $output = readpipe($expect);
+    my $exit_code = $? >> 8;
+    $output = trim($output);
+    if($exit_code != 0 && $output !~ /expect: spawn id .* not open/){
+        my @array = split(/\n/,$output);
+        logMessage("WARN",$array[-1]);
+        return ($exit_code,$output);
+    }
+    return (0,$output);
+}
+sub getOption{
+    GetOptions(
+        'h:s'   => \@HOSTS_CONFIG,
+        'f:s'   => \$HOSTS_FILE,
+        'W:s'   => \$PASSWORD,
+        'help!' => \$IS_HELP,
+    );
+    if(@ARGV != 0){
+        errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
+    }
+    if($IS_HELP){
+        print $HELP_MESSAGE;
+        exit 0;
+    }
+}
+sub processHosts{
+    if(-e $HOSTS_FILE){
+        my @host_list = readLineFromFile($HOSTS_FILE);
+        for my $host(@host_list){
+            push @HOSTS_CONFIG,$host;
+        }
+    }
+    my @temp_list;
+    for my $host(@HOSTS_CONFIG){
+        if($host =~ /@/){
+            my ($user_name,$address) = split(/@/,$host);
+            ($user_name,$address) = (trim($user_name),trim($address));
+            push @temp_list,[($user_name,$address)];
+        }else{
+            push @temp_list,[($CURRENT_USER_NAME,$host)];
+        }
+    }
+    @HOSTS_CONFIG = @temp_list;
+}
+sub checkEnvironment{
+    my $whichCode;
+    my @problemList = ();
+    for my $cmd(@NEED_COMMAND){
+        system("which $cmd > /dev/null 2>&1");
+        $whichCode = $? >> 8;
+        if($whichCode != 0){
+            push @problemList,$cmd;
+        }
+    }
+    if(@problemList > 0){
+        errorMessage("Environment not enough to continue install, command ".join(',',@problemList)." not found in current environment");
+    }
+}
+sub checkOption{
+    if(@HOSTS_CONFIG < 1){
+        errorMessage("No any host be specified to exchange ssh keys");
+    }
+}
+sub generateKey{
+    my $home = $ENV{"HOME"};
+    if(-e "$home/.ssh/id_rsa"){
+        logMessage("INFO","$home/.ssh/id_rsa file exists ... key generation skipped")
+    }else{
+        my $generate_command = qq{ssh-keygen -t rsa -N "" -f $home/.ssh/id_rsa < /dev/null > /dev/null 2> /dev/null};
+        system($generate_command);
+    }
+    my $password;
+    for my $config(@HOSTS_CONFIG){
+        my ($user_name,$address) = @$config;
+        logMessage("INFO","Copy rsa to $user_name\@$address");
+        my $copy_command = qq{$sshcopyid -i $home/.ssh/id_rsa.pub $user_name\@$address};
+        if($password eq ""){
+            readpipe(qq{sh -c "timeout -s 9 2 $ssh $user_name\@$address -T 'date' > /dev/null 2> /dev/null" > /dev/null 2> /dev/null});
+            my $exit_code = $? >> 8;
+            if($exit_code == 0){
+                readpipe(qq{$scp $home/.ssh/id_rsa $home/.ssh/id_rsa.pub $user_name\@$address:.ssh/});
+                next;
+            }
+        }
+        $password = $PASSWORD;
+        if(exists $PASSWORD_HASH{$user_name}){
+            $password = $PASSWORD_HASH{$user_name};
+        }
+        if($password eq ""){
+            logMessage("WARN","Please input password for $user_name\@$address:");
+            $password = <STDIN>;
+            $password = trim($password);
+            $PASSWORD_HASH{$user_name} = $password;
+        }
+        my ($code,$output) = executeWithExpect($copy_command,1,([["yes/no","yes",1],["password",$password],["*#"]]));
+        if($code == 0){
+            readpipe(qq{$scp $home/.ssh/id_rsa $home/.ssh/id_rsa.pub $user_name\@$address:.ssh/});
+        }
+        while($code != 0){
+            logMessage("WARN","Please input password for $user_name\@$address:");
+            $password = <STDIN>;
+            $password = trim($password);
+            $PASSWORD_HASH{$user_name} = $password;
+            ($code,$output) = executeWithExpect($copy_command,1,([["yes/no","yes",1],["password",$password],["*#"]]));
+            if($code == 0){
+                readpipe(qq{$scp $home/.ssh/id_rsa $home/.ssh/id_rsa.pub $user_name\@$address:.ssh/});
+            }
+        }
+    }
+}
+sub copyKnownHosts{
+    my $home = $ENV{"HOME"};
+    for my $config(@HOSTS_CONFIG){
+        my ($user_name,$address) = @$config;
+        logMessage("INFO","Copy known_hosts to $user_name\@$address");
+        my $copy_command = qq{$scp $home/.ssh/known_hosts $user_name\@$address:.ssh/;};
+        $copy_command = $copy_command.qq{$ssh $user_name\@$address -T 'chmod 0700 .ssh;touch .ssh/iddummy.pub;touch .ssh/authorized_keys;touch .ssh/config;chmod 0600 .ssh/auth* .ssh/id*;chmod 0644 .ssh/id*.pub .ssh/config;'};
+        readpipe($copy_command);
+    }
+}
+sub main{
+    umask(18);
+    getOption();
+    $CURRENT_USER_NAME = trim(readpipe("whoami"));
+    checkEnvironment();
+    processHosts();
+    checkOption();
+    generateKey();
+    copyKnownHosts();
+}
+my $command_string = $0." ".join(" ",@ARGV);
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
+main($command_string);
