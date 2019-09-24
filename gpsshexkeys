@@ -1,6 +1,5 @@
 #!/usr/bin/perl
 use threads;
-use MIME::Base64;
 use File::Basename;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
 use IO::Handle qw();
@@ -78,16 +77,9 @@ sub trim{
     $string =~ s/(^\s+|\s+$)//g;
     return $string;
 }
-sub encode{
-    my ($string) = @_;
-    my $encode = encode_base64($string);
-    $encode =~ s/\n//g;
-    return $encode;
-}
 sub logMessage{
     my ($flag,$message) = @_;
-    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
-    $message = "$time_flag-[$flag]-:$message\n";
+    $message = "[$flag]-:$message\n";
     if($flag eq "ERROR"){
         print STDERR $message;
     }else{
