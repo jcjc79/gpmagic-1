@@ -1515,7 +1515,11 @@ sub checkTableDefinition{
             if($idx == 0 && "" ne $relation_dsc){$comment_sql = $comment_sql.qq{COMMENT ON TABLE "$des_schema"."$des_relation" IS '$relation_dsc';\n};}
             if("" ne $column_dsc){$comment_sql = $comment_sql.qq{COMMENT ON COLUMN "$des_schema"."$des_relation"."$column_name" IS '$column_dsc';\n};}
         }
-        $recreate_sql = $recreate_sql.")WITH(APPENDONLY=TRUE,COMPRESSTYPE=ZLIB,COMPRESSLEVEL=5)DISTRIBUTED RANDOMLY;";
+        if($DES_DATABASE_VERSION > 5){
+            $recreate_sql = $recreate_sql.")WITH(APPENDONLY=TRUE,COMPRESSTYPE=ZSTD)DISTRIBUTED RANDOMLY;";
+        }else{
+            $recreate_sql = $recreate_sql.")WITH(APPENDONLY=TRUE,COMPRESSTYPE=ZLIB,COMPRESSLEVEL=5)DISTRIBUTED RANDOMLY;";
+        }
         if("" ne $FORCE_OWNER){
             $recreate_sql = $recreate_sql.qq{ALTER TABLE "$des_schema"."$des_relation" OWNER TO $FORCE_OWNER;};
         }
