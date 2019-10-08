@@ -8,12 +8,12 @@ use IO::Handle qw();
 use Fcntl qw(:flock);
 use POSIX;
 
-my ($DATABASE_NAME,$PORT,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$TO_FILE,$TARGET_VERSION,$IS_HELP,$VERSION);
+my ($DATABASE_NAME,$PORT,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$TO_FILE,$TARGET_VERSION,$RELOPTION_FILE,$IS_HELP,$VERSION);
 my (%SET_OF_INCLUDE_SCHEMA,$INCLUDE_SCHEMA_SIZE,%SET_OF_EXCLUDE_SCHEMA);
 my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
     %MAP_OF_ATTRIBUTE,%MAP_OF_ATTRDEF,%MAP_OF_DISTRIBUTION,%MAP_OF_PARTITION,%MAP_OF_PARTITION_RULE,%MAP_OF_PARTITION_OID,%MAP_OF_TABLECHECK,
     %MAP_OF_TABLE,%MAP_OF_VIEW_DEPTH,%MAP_OF_EXTTABLE_FMT,%MAP_OF_INDEX);
-my (@TABLE_PARTITIONS_ORDER_ARRAY);
+my (@TABLE_PARTITIONS_ORDER_ARRAY,%MAP_OF_RELOPTION);
 my ($DATABASE_TABLESPACE,$DATABASE_VERSION);
 my ($FILE_HANDLE);
 my ($SQL_BATCH) = (300);
@@ -138,7 +138,7 @@ FROM pg_attribute
 WHERE attrelid >= 16384 AND attnum > 0 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = attrelid);};
 my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(pg_get_expr(adbin,adrelid)) FROM pg_attrdef
 WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = adrelid);};
-my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,','),'' AS policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
+my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,','),'p' AS policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
 my $SQL_GET_DISTRIBUTION_V6 = q{SELECT localoid,array_to_string(distkey,','),policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
 my $SQL_GET_COMPTYPE = q#SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
 my $SQL_GET_ENUM = q#SELECT gp_toolkit.mcencode(typname),typnamespace,typowner,string_agg(gp_toolkit.mcencode(enumlabel),',' ORDER BY e.oid)
@@ -280,6 +280,15 @@ OPTIONS
   Backup ddl for this greenplum version.
   For greenplum version 5, external table have not error table.
 
+--reloption <filename>
+
+  Use a file to specify table's reloptions.
+  For example, if you need modify some table's reloptions when migrate to other cluster.
+  Such as, old cluster use too many column table, for many small table,
+  you can use this parameter to specify the reloptions when backup ddls, like:
+  public.smalltable1 => appendonly=true,compresstype=zlib,compresslevel=5,orientation=row
+  public.smalltable2 => appendonly=true,compresstype=zlib,compresslevel=5,orientation=row
+
 -h|--help
 
   Displays the online help.
@@ -327,6 +336,24 @@ sub output{
 }
 sub outwarn{
     print STDERR trim($_[0])."\n";
+}
+sub readLineFromFile{
+    my ($file_path) = @_;
+    if(!-e $file_path){
+        errorMessage("No file exists named: $file_path");
+    }
+    if(!open(FILE,"<",$file_path)){
+        errorMessage("Can't open file: $file_path");
+    }
+    my @line_list = ();
+    while(my $line = <FILE>){
+        $line = trim($line);
+        if(!($line =~ /^#/) && $line ne ""){
+            push @line_list,$line;
+        }
+    }
+    close FILE;
+    return @line_list;
 }
 sub outputTask{
     my ($task,$indexref,$taskTail) = @_;
@@ -404,6 +431,7 @@ sub getOption{
         'S:s'              => \@EX_SCHEMA_ARRAY,
         'f:s'              => \$TO_FILE,
         'target-version:i' => \$TARGET_VERSION,
+        'reloption:s'      => \$RELOPTION_FILE,
         'h|help!'          => \$IS_HELP,
         'version!'         => \$VERSION,
     );
@@ -451,6 +479,13 @@ sub checkOption{
             }
         }
         $INCLUDE_SCHEMA_SIZE = keys %SET_OF_INCLUDE_SCHEMA;
+    }
+    if(-e $RELOPTION_FILE){
+        my @reloption_array = readLineFromFile($RELOPTION_FILE);
+        for my $row(@reloption_array){
+            my ($tablename,$reloption) = split(/=>/,$row);
+            $MAP_OF_RELOPTION{trim($tablename)} = uc(trim($reloption));
+        }
     }
 }
 sub skipThisSchema{
@@ -747,7 +782,7 @@ sub getAttributeInformation{
         if("r" eq $policytype){
             $MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED REPLICATED";
             next;
-        }elsif("" eq $attrnums && "p" eq $policytype){
+        }elsif("" eq $attrnums){
             $MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED RANDOMLY";
             next;
         }
@@ -1022,6 +1057,10 @@ sub getTableInformation{
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$unlogged) = @$row;
         ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
+        my $tablename = $relnamespace.".".$relname;
+        if(exists $MAP_OF_RELOPTION{$tablename}){
+            $reloptions = $MAP_OF_RELOPTION{$tablename};
+        }
         $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$unlogged)];
     }
     @result = queryResult($SQL_GET_PARTITION_ORDER);
