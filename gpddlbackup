@@ -1154,7 +1154,16 @@ sub getNextLevelPartition{
             }
             $rule_def =~ s/\s+$//;
         }else{
-            $rule_def = $rule_def." WITH(APPENDONLY=FALSE)";
+            if($parreloptions eq ""){
+                $parreloptions = "APPENDONLY=FALSE";
+            }
+            if($paroptions ne $reloptions){
+                if($rule_def =~ /\s*TABLESPACE\s*/){
+                    $rule_def =~ s/\s*TABLESPACE\s*/ WITH($parreloptions) TABLESPACE /;
+                }else{
+                    $rule_def = $rule_def." WITH($parreloptions)";
+                }
+            }
         }
         if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION |^DEFAULT SUBPARTITION /){
             $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
