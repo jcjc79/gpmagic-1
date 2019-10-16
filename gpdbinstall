@@ -1048,7 +1048,10 @@ sub exchangeGpadminKey{
     close $file_handle;
     system(qq{sudo chmod 755 $EXKEYS_FILE_NAME});
     my $gp_admin_passwd = decode($GP_ADMIN_PASSWD);
-    my $command = qq{sudo su - $GP_ADMIN_NAME -c ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;$EXKEYS_FILE_NAME -f $WORK_PATH/all_hosts -W '$gp_admin_passwd'"};
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "$EXKEYS_FILE_NAME -f $WORK_PATH/all_hosts -W '$gp_admin_passwd'"};
+    if($MAJOR_VERSION > 5){
+        $command = qq{sudo su - $GP_ADMIN_NAME -c ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;gpssh-exkeys -f $WORK_PATH/all_hosts"};
+    }
     executeWithExpect($command,0,([["password",$gp_admin_passwd,1],["*#"]]));
 }
 sub initGpSystem{
