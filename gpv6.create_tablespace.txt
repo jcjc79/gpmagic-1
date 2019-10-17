@@ -1,0 +1,52 @@
+CREATE LANGUAGE plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.create_tablespace(tspname varchar) RETURNS VOID AS $$
+import re,os,commands,time
+pattern = r"^[a-z][0-9a-z]+$"
+if not re.match(pattern,tspname):
+    plpy.error("Tablespace name is not legal:%s" %(tspname))
+rslt = plpy.execute("SELECT oid FROM pg_tablespace WHERE spcname = '%s'" % (tspname))
+if len(rslt) > 0:
+    plpy.error("Tablespace with oid:%s and name:%s exists" % (rslt[0]["oid"],tspname))
+rslt = plpy.execute("SELECT count(*) FROM gp_segment_configuration WHERE status <> 'u' OR role <> preferred_role;")
+if rslt[0]["count"] > 0:
+    plpy.error("Can not create tablespace when cluster is not normal")
+rslt = plpy.execute("SELECT count(*) FROM gp_segment_configuration WHERE datadir NOT LIKE '%/default/%';")
+if rslt[0]["count"] > 0:
+    plpy.error("The datadir in gp_segment_configuration is unknown")
+rslt = plpy.execute("SELECT hostname,replace(datadir,'/default/','/gpfs/') datadir FROM gp_segment_configuration ORDER BY dbid;")
+for onerow in rslt:
+    (hostname,datadir) = (onerow["hostname"],onerow["datadir"])
+    mkdircmd = """ssh %s -T 'mkdir -p %s/%s'""" % (hostname,datadir,tspname)
+    (cmdcode,cmdvalue) = commands.getstatusoutput(mkdircmd)
+    if len(cmdvalue) > 0 or cmdcode != 0:
+        plpy.error("Execute mkdir occur error:\n%s" % (cmdvalue))
+    ckdircmd = """ssh %s -T 'ls -A %s/%s|wc -w'""" % (hostname,datadir,tspname)
+    (cmdcode,cmdvalue) = commands.getstatusoutput(ckdircmd)
+    if int(cmdvalue) != 0:
+        plpy.error("Directory is not empty:%s/%s" % (datadir,tspname))        
+rslt = plpy.execute("SELECT content,replace(datadir,'/default/','/gpfs/') datadir FROM gp_segment_configuration WHERE role = 'p' ORDER BY dbid;")
+createsql = "CREATE TABLESPACE %s " % (tspname)
+witharry = []
+for onerow in rslt:
+    (content,datadir) = (onerow["content"],onerow["datadir"])
+    if content == -1:
+        createsql += "LOCATION '" + datadir + "/" + tspname + "'"
+    else:
+        witharry.append("content%s='%s/%s'" % (content,datadir,tspname))
+createsql += " WITH(" + ",".join(witharry) + ");"
+rslt = plpy.execute("SELECT current_database() AS dbname,inet_server_port() AS dbport,current_user AS dbuser;")
+(dbname,dbport,dbuser) = (rslt[0]["dbname"],rslt[0]["dbport"],rslt[0]["dbuser"])
+createcmd = '''psql -d %s -p %s -U %s -qtAXc "%s"''' % (dbname,dbport,dbuser,createsql)
+(cmdcode,cmdvalue) = commands.getstatusoutput(createcmd)
+if len(cmdvalue) > 0 or cmdcode != 0:
+    plpy.error("Create tablespace occur error:\n%s" % (cmdvalue))
+rslt = plpy.execute("SELECT oid FROM pg_tablespace WHERE spcname = '%s'" % (tspname))
+if len(rslt) < 1:
+    plpy.error("Create tablespace failed")
+$$ LANGUAGE plpythonu;
+
+SELECT gp_toolkit.create_tablespace('gptblspc');
+
+
+
