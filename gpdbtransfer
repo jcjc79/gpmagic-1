@@ -12,7 +12,7 @@ use POSIX;
 my ($SRC_HOST,$SRC_PORT,$SRC_USER,$SRC_PASSWD,$SRC_DATABASE,$DES_HOST,$DES_PORT,$DES_USER,$DES_PASSWD,$DES_DATABASE,
     $KEY,$SRC_MAPFILE,$BY_LEAF,$FORCE,$FORCE_OWNER,$MASTER_ONLY,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,
     $INCREMENT,$IGNORE_CHECK,$IGNORE_HBA,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
-my (%SRC_HOSTMAP,$TASK_QUEUE,$MSG_QUEUE,$LOG_FILE_HANDLE);
+my (%SRC_HOSTMAP,%HASH_REPLICATION_TABLE,$TASK_QUEUE,$MSG_QUEUE,$LOG_FILE_HANDLE);
 my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$SQL_BATCH) = (20,6,1,300);
 my ($KEY_DEFAULT) = (20140825);
 my ($SRC_SEG_SIZE,$DES_SEG_SIZE,$SRC_GPHOME);
@@ -54,6 +54,8 @@ on all format 'text';
 select count(*) from gp_toolkit.gp_segment_config_ext;
 drop external table if exists gp_toolkit.gp_segment_config_ext;};
 
+my $GET_REPLICATION_TABLE_SQL = q{select replace(encode(textsend(n.nspname),'base64'),chr(10),''),replace(encode(textsend(c.relname),'base64'),chr(10),'')
+    from pg_namespace n,pg_class c,gp_distribution_policy p where n.oid = c.relnamespace and c.oid = p.localoid AND policytype='r';};
 my $GET_ALL_USER_TABLE_SQL = q{select '',replace(encode(textsend(n.nspname),'base64'),chr(10),''),replace(encode(textsend(c.relname),'base64'),chr(10),'')
     from pg_class c,pg_namespace n,gp_distribution_policy p
     where c.relnamespace=n.oid and c.oid=p.localoid and (c.relnamespace>16384 or n.nspname='public') and n.nspname not like E'pg\_temp\_%' and n.nspname not like E'pg\_toast\_temp\_%'
@@ -1151,6 +1153,16 @@ sub getTableFromFile{
     }
     return @line_array;
 }
+sub getReplicationTable{
+    if($SRC_DATABASE_VERSION > 5){
+        my @result = queryResult("SRC",$GET_REPLICATION_TABLE_SQL);
+        for my $row(@result){
+            my ($scma,$rel) = @$row;
+            ($scma,$rel) = (decode($scma),decode($rel));
+            $HASH_REPLICATION_TABLE{$scma.".".$rel} = "";
+        }
+    }
+}
 sub getAllUserTable{
     if($BY_LEAF){
         return queryResult("SRC",$GET_PARENT_CHILD_LIST_SQL);
@@ -1263,7 +1275,11 @@ sub processTableArray{
         }elsif(exists $specify_table_hash{$src_parent}){
             $where = @{$specify_table_hash{$src_parent}}[2];
         }
-        push @TABLE_ARRAY,[($src_ao,$src_scma,$src_rel,$src_typ,$src_tim,$where,"r",qq{"$src_scma"."$src_rel"},$des_scma,$des_rel)];
+        my $policytype = "p";
+        if(exists $HASH_REPLICATION_TABLE{$src_scma.".".$src_rel}){
+            $policytype = "r";
+        }
+        push @TABLE_ARRAY,[($src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,"r",qq{"$src_scma"."$src_rel"},$des_scma,$des_rel)];
     }
     if($check_specify && !$INCREMENT){
         my @all_user_view_list = getAllUserView();
@@ -1289,7 +1305,7 @@ sub processTableArray{
                 next;
             }
             my ($des_scma,$des_rel,$where) = @{$specify_table_hash{$src_table}};
-            push @TABLE_ARRAY,[("",$src_scma,$src_rel,"","",$where,"v",$dep_tables,$des_scma,$des_rel)];
+            push @TABLE_ARRAY,[("",$src_scma,$src_rel,"p","","",$where,"v",$dep_tables,$des_scma,$des_rel)];
         }
     }
 }
@@ -1380,11 +1396,11 @@ sub processLastTransferStat{
     my @temp_table_array = ();
     my $ignore_count = 0;
     for my $row(@TABLE_ARRAY){
-        my ($src_ao,$src_scma,$src_rel,$src_typ,$src_tim,$where,$relkind,$dep_tables,$des_scma,$des_rel) = @$row;
+        my ($src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,$relkind,$dep_tables,$des_scma,$des_rel) = @$row;
         my $src_table = $src_scma.".".$src_rel;
         my $des_table = $des_scma.".".$des_rel;
         if(!$INCREMENT){
-            push @temp_table_array,[($src_table,$des_table,$where,$relkind,$dep_tables)];
+            push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables)];
             next;
         }
         if("h" eq $src_typ){
@@ -1394,7 +1410,7 @@ sub processLastTransferStat{
                 ($f_md5,$f_count) = @{$last_stat_from_file{$src_table}};
             }
             if("" eq $f_md5 || $f_md5 ne $md5){
-                push @temp_table_array,[($src_table,$des_table,$where,$relkind,$dep_tables,$md5,0)];
+                push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$md5,0)];
             }else{
                 $ignore_count ++;
             }
@@ -1405,7 +1421,7 @@ sub processLastTransferStat{
                 ($f_tim,$f_count) = @{$last_stat_from_file{$src_table}};
             }
             if("" eq $f_tim || $f_tim ne $src_tim || $count ne $f_count){
-                push @temp_table_array,[($src_table,$des_table,$where,$relkind,$dep_tables,$src_tim,$count)];
+                push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count)];
             }else{
                 $ignore_count ++;
             }
@@ -1562,7 +1578,7 @@ sub executeTransfer{
     my $base64_pass = encode("" eq $SRC_PASSWD ? "--" : $SRC_PASSWD);
     while(defined $task){
         my @stat_msg :shared;
-        my ($src_table,$des_table,$where,$relkind,$dep_tables,$src_tim,$count) = @$task;
+        my ($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count) = @$task;
         my $from_to_info = qq{FROM $src_table TO $des_table};
         if($src_table eq $des_table){
             $from_to_info = qq{FOR TABLE NAME $des_table};
@@ -1601,6 +1617,8 @@ sub executeTransfer{
                 }else{
                     $from_master = 1;
                 }
+            }elsif($policytype eq "r"){
+                $from_master = 1;
             }
             my $lock_sql = "--";
             if("" ne $dep_tables){
@@ -1637,7 +1655,7 @@ sub executeTransfer{
                 @stat_msg = ("FAILED","Execute data clean occur error, $from_to_info [$code],[$value]");
                 goto GOTO_NEXT_TASK;
             }
-            my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "LOW" : "FAST")." WITH $where");
+            my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "SLOW" : "FAST")." WITH $where");
             $MSG_QUEUE->enqueue(\@info_msg);
             my $des_sql = qq{BEGIN;LOCK TABLE $des_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\nINSERT INTO $des_tableqq SELECT * FROM $des_ext_table;\nEND;};
             my $start = time();
@@ -1745,6 +1763,8 @@ sub main{
     generateSrcHostMap();
     generateSrcClusterInfo();
     checkCleverCommand();
+    getReplicationTable();
+    getAllUserTable();
     processTableArray();
     tryCheckpoint();
     processLastTransferStat();
