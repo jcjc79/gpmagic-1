@@ -1609,7 +1609,11 @@ sub executeTransfer{
                    @stat_msg = ("FAILED","Can't get view's explain, $from_to_info [$code],[$value]");
                    goto GOTO_NEXT_TASK;
                 }
-                if($value =~ /Gather Motion/){
+                if($value =~ /Gather Motion 1:1 /){
+                    if($SRC_SEG_SIZE > 1){
+                        $from_master = 1;
+                    }
+                }elsif($value =~ /Gather Motion/){
                     $value =~ s/Gather Motion/Ignore Check/;
                     if($value =~ / Motion/){
                         $from_master = 1;
