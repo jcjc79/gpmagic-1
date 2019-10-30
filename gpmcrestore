@@ -15,8 +15,9 @@ my ($TASK_QUEUE,$MSG_QUEUE);
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my ($FULL_BACKUP_TIME,$LAST_BACKUP_TIME,$INDEX_FILE_TIME);
 my (@TASK_THREAD,$MSG_THREAD,$LOCK_THREAD);
-my (%ALL_INDEX_MAP,@INDEX_CREATE_LIST,@INDEX_DROP_LIST);
+my (%HASH_REPLICATION_TABLE,%ALL_INDEX_MAP,@INDEX_CREATE_LIST,@INDEX_DROP_LIST);
 my (@MESSAGE_CACHE);
+my ($DATABASE_VERSION);
 my ($WRITE_TO_FILE) = (0);
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $MAIN_PID = substr("000000".$$,-6);
@@ -79,7 +80,8 @@ select replace(encode(textsend(x.nspname),'base64'),chr(10),''),
 from all_parent x
 left join all_child y on x.oid = y.parrelid
 order by decode(y.relpages,y.relpages,x.relpages) desc;};
-
+my $GET_REPLICATION_TABLE_SQL = q{select replace(encode(textsend(n.nspname),'base64'),chr(10),''),replace(encode(textsend(c.relname),'base64'),chr(10),'')
+    from pg_namespace n,pg_class c,gp_distribution_policy p where n.oid = c.relnamespace and c.oid = p.localoid AND policytype='r';};
 my $GET_INDEX_INFO_LIST_SQL = q{select
     replace(encode(textsend(schemaname),'base64'),chr(10),''),
     replace(encode(textsend(tablename),'base64'),chr(10),''),
@@ -516,6 +518,12 @@ sub checkOption{
     logMessage("INFO","Option values: --time-to $TIME_TO --force-redo $FORCE_REDO -a $DATA_ONLY --truncate $NEED_TRUNCATE");
     logMessage("INFO","Option values: --no-error $NO_ERROR_TABLE --encoding $ENCODING --parameter-file $PARAMETER_FILE");
 }
+sub getVersion{
+    my $versionString = queryResult("SELECT version();","Scalar");
+    if($versionString =~ /Greenplum Database (\d)/){
+        $DATABASE_VERSION = int($1);
+    }
+}
 sub processBackupTimeAndDataDirectory{
     $MASTER_BACKUP_PATH = $DIRECTORY;
     if("" eq $MASTER_BACKUP_PATH){
@@ -739,6 +747,16 @@ sub processTableArray{
     }
     #####################################################################################################
 }
+sub getReplicationTable{
+    if($DATABASE_VERSION > 5){
+        my @result = queryResult($GET_REPLICATION_TABLE_SQL);
+        for my $row(@result){
+            my ($scma,$rel) = @$row;
+            ($scma,$rel) = (decode($scma),decode($rel));
+            $HASH_REPLICATION_TABLE{$scma.".".$rel} = "";
+        }
+    }
+}
 sub getLastBackupStatFromFile{
     my %last_stat_map = ();
     my $time_string = readpipe("ls -1L $MASTER_BACKUP_PATH|sort -rn");
@@ -866,13 +884,17 @@ sub executeRestore{
         my ($scma,$rel,$where,$time) = @$task;
         my $table = $scma.".".$rel;
         my $full_name = $DATABASE_NAME.".".$table;
+        my $on_number = "ALL";
+        if(exists $HASH_REPLICATION_TABLE{$table}){
+            $on_number = "1";
+        }
         my $back_tbnm = $BACKUP_DB.".".$table;
         $rel =~ s/\$/\\\\\$/g;
         my @stat_msg :shared;
         $where = "" eq $where ? $GLOBAL_CONDITION : " where ".$where;
         my $query = qq{drop external table if exists $ext_table;\n};
         $query = $query.qq{create external web table $ext_table(like "$scma"."$rel")\n};
-        $query = $query."execute E'sh /tmp/fifo/gpmcrestorecat.sh $backup_path $time \$GP_SEG_PORT $back_tbnm $self_path' on ALL format 'text' encoding '$ENCODING';\n";
+        $query = $query."execute E'sh /tmp/fifo/gpmcrestorecat.sh $backup_path $time \$GP_SEG_PORT $back_tbnm $self_path' on $on_number format 'text' encoding '$ENCODING';\n";
         if($NEED_TRUNCATE){
             $query = $query.qq{truncate table "$scma"."$rel";\n};
         }
@@ -981,6 +1003,7 @@ sub main{
     logMessage("INFO","Start restore process".("." x 66));
     logMessage("INFO","Run command: ".$_[0]);
     checkOption();
+    getVersion();
     processBackupTimeAndDataDirectory();
     system("unset PGOPTIONS");
     checkLanguage();
@@ -988,6 +1011,7 @@ sub main{
     createCleverCommand();
     restoreDdl();
     processTableArray();
+    getReplicationTable();
     processLastBackupStat();
     processIndexDropAndLog();
     checkRestoreSchema();
