@@ -212,7 +212,7 @@ my $BACKUP_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by 
     )a,pg_type t where t.oid=a.typs[a.idx];};
 my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar,int4";
 my $BACKUP_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "88db7cc94198f92d27b47aae3dd93f7";
+my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "cea85e7da59a08d55b0c1bcb59876ea9";
 my $BACKUP_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_backup_function(dbname varchar,port int,content int,path varchar,
     tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar,onnumber int)returns bigint as $$
 import os,commands,time
