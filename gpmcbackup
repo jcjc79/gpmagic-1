@@ -15,6 +15,7 @@ my ($FULL_FILE_NAME,$LAST_STAT_FILE_NAME,$LOG_FILE_NAME,$DONE_FILE_NAME,$ALLTABL
 my ($TASK_QUEUE,$MSG_QUEUE);
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my (@TASK_THREAD,$MSG_THREAD,$LOCK_FILE_HANDLE);
+my (%HASH_REPLICATION_TABLE,$CLUSTER_SIZE);
 my (@MESSAGE_CACHE);
 my ($DATABASE_VERSION);
 my ($WRITE_TO_FILE) = (0);
@@ -132,7 +133,8 @@ left join last_oper c on y.parchildrelid = c.objid
 left join aosegname a1 on x.oid = a1.oid
 left join aosegname a2 on y.parchildrelid = a2.oid
 order by decode(y.relpages,y.relpages,x.relpages) desc;};
-
+my $GET_REPLICATION_TABLE_SQL = q{select replace(encode(textsend(n.nspname),'base64'),chr(10),''),replace(encode(textsend(c.relname),'base64'),chr(10),'')
+    from pg_namespace n,pg_class c,gp_distribution_policy p where n.oid = c.relnamespace and c.oid = p.localoid AND policytype='r';};
 my $EXECUTE_FUNCTION_ARG_CHECK_SQL = q{select string_agg(t.typname,',' order by a.idx) from(
     select proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx from pg_proc
         where proname='gp_backup_execute' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit')
@@ -208,11 +210,11 @@ my $BACKUP_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by 
     select proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx from pg_proc
         where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit')
     )a,pg_type t where t.oid=a.typs[a.idx];};
-my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar";
+my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar,int4";
 my $BACKUP_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "88db7cc94198f92d27b47aae3dd93f7c";
+my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "88db7cc94198f92d27b47aae3dd93f7";
 my $BACKUP_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_backup_function(dbname varchar,port int,content int,path varchar,
-    tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar)returns bigint as $$
+    tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar,onnumber int)returns bigint as $$
 import os,commands,time
 def printLog(flag,str):
     fname="%s/db_dumps/%s/backup_%s_log.log" % (path,dtflag,content)
@@ -237,6 +239,8 @@ try:
     copyq="""copy (select * from "%s"."%s"%s) to STDOUT;""" % (scma,rel,whr)
     if ""==whr:
         copyq="""copy "%s"."%s" to STDOUT;""" % (scma,rel)
+    if onnumber!=-1 and content!=onnumber:
+        copyq=""
     cmd="set -o pipefail\n"+"PGOPTIONS='-c gp_session_role=utility -c client_encoding="+encoding+"' psql -qtAX -v ON_ERROR_STOP=1 -d '"+dbname+"' -p "+str(port)
     cmd+=" <<'_END_OF_SQL'|gzip "+str(level)+"> "+dirc+"/"+fname+".tmp\n"+copyq+"\n_END_OF_SQL\n"+"mv "+dirc+"/"+fname+".tmp"+" "+dirc+"/"+fname+".gz"
     printLog("BEGIN","")
@@ -738,6 +742,7 @@ sub checkRandomTable{
     }else{
         logMessage("INFO","Racord in gp_toolkit.gp_segment_config is OK");
     }
+    $CLUSTER_SIZE = $segment_number;
 }
 sub checkLanguage{
     my $result = queryResult("select 1 from pg_language where lanname='plpythonu';","Scalar");
@@ -1074,6 +1079,16 @@ sub processTableArray{
     logMessage("INFO","All table should be backup be specified: [$log_size]");
     logAllTableToFile();
 }
+sub getReplicationTable{
+    if($DATABASE_VERSION > 5){
+        my @result = queryResult($GET_REPLICATION_TABLE_SQL);
+        for my $row(@result){
+            my ($scma,$rel) = @$row;
+            ($scma,$rel) = (decode($scma),decode($rel));
+            $HASH_REPLICATION_TABLE{$scma.".".$rel} = "";
+        }
+    }
+}
 sub getLastFullBackupDate{
     my $time_string = readpipe("ls -1L $MASTER_BACKUP_PATH|sort -rn");
     for my $time(split(/\n/,$time_string)){
@@ -1237,12 +1252,17 @@ sub executeBackup{
         my $table = $scma.".".$rel;
         my $full_name = $DATABASE_NAME.".".$table;
         my $table_qq = qq{"$scma"."$rel"};
+        my $on_number = "-1";
+        if(exists $HASH_REPLICATION_TABLE{$table}){
+            srand;
+            $on_number = int(rand($CLUSTER_SIZE));
+        }
         $where = "" eq $where ? $GLOBAL_CONDITION : " where ".$where;
         $where =~ s/'/''/g;
         my @stat_msg :shared;
         my $query = qq{begin;LOCK TABLE $table_qq IN ACCESS SHARE MODE NOWAIT;};
         $query = $query.qq{select sum(gp_toolkit.gp_backup_function('$DATABASE_NAME',database_port,database_content,};
-        $query = $query.qq{$path,'$table',$TIME_FLAG,'$where','$ENCODING','$FAST')) from gp_dist_random('gp_toolkit.gp_segment_config');};
+        $query = $query.qq{$path,'$table',$TIME_FLAG,'$where','$ENCODING','$FAST',$on_number)) from gp_dist_random('gp_toolkit.gp_segment_config');};
         $query = $query.qq{end;};
         my @info_msg :shared = ("INFO","Start backup table $full_name");
         $MSG_QUEUE->enqueue(\@info_msg);
@@ -1368,6 +1388,7 @@ sub main{
     checkHeapStatFunction();
     mergeIncrementToFull();
     processTableArray();
+    getReplicationTable();
     tryCheckpoint();
     processLastBackupStat();
     my $error_count = startBackup();
