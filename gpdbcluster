@@ -10,7 +10,7 @@ my ($TRUE,$FALSE) = ("True",undef);
 my ($MASTER_STATUS_OK,$MASTER_STATUS_ERROR) = ("Normal","Error");
 my ($CURRENT_ROLE,$ROLE_IS_MASTER,$ROLE_IS_STANDBY,$ROLE_IS_UNKNOWN,$ROLE_CHECK_SLEEP,$ROLE_CHECK_TIMES) = ("Unknown","Master","Standby","Unknown",6,100);
 my ($STANDBY_STATUS_OK,$STANDBY_STATUS_ERROR,$STANDBY_STATUS_UNCONFIGUED) = ("Synchronized","UnSynchronized","Unconfiged");
-my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (10,29,60,20);
+my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$SSH_TEST_TIMEOUT) = (40,30,90,20);
 my ($MAX_HEALTH_CHECK_TIMES,$HEALTH_CHECK_SLEEP,$START_CLUSTER_SLEEP,$COMMAND_FAIL_SLEEP) = (4,1,20,300);
 my ($HEALTH_STATUS_FILE,$HEALTH_CHECK_FILE) = ($ENV{"HOME"}."/.gpdbcluster.health.status",$ENV{"HOME"}."/.gpdbcluster.health.check");
 my ($SQL_DELIM,$RECORD_SPLIT) = (chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
@@ -264,10 +264,10 @@ sub checkOption{
 }
 sub queryResult{
     my ($query_sql) = @_;
-    my $CMDS = "sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'\n";
+    my $CMDS = "sudo timeout -s 9 $COMMAND_TIMEOUT sudo -iu $HS_PGUSER sh <<'END_OF_COMMAND'\n";
     $CMDS = $CMDS."PGOPTIONS='-c client_encoding=UTF8' PGHOST='$HS_M_HSNM' PGDATABASE='template1' PGPORT=$HS_M_PORT PGUSER='$HS_PGUSER' ";
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -qtAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
+    $CMDS = $CMDS."timeout -s 9 $SQL_TIMEOUT psql -R '$/' -qtAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
     $CMDS = $CMDS.$query_sql."\n";
     $CMDS = $CMDS."END_OF_SQL\n";
     $CMDS = $CMDS."END_OF_COMMAND\n";
@@ -425,7 +425,7 @@ sub checkStandbyIsActivated{
         return $FALSE;
     }
     logMessage("INFO","Check whether Standby is activated");
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "psql -qtAX -p $HS_S_PORT template1 -c 'select 1;'" 2>&1});
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "timeout -s 9 $SQL_TIMEOUT psql -qtAX -p $HS_S_PORT template1 -c 'select 1;'" 2>&1});
     if($output =~ /FATAL:.*too many clients/ || $output =~ /FATAL:.*too many connections/){
         logMessage("WARN","Occur too many connections error, will ignore it, please check the database status");
         $code = 0;
@@ -483,14 +483,14 @@ sub getMasterStatus{
         $try_to = $try_from;
     }
     my $check_sql = qq{select pg_sleep($SQL_SLEEP);};
-    my $timeout = $SQL_TIMEOUT + $SQL_SLEEP;
+    my $timeout = $COMMAND_TIMEOUT + $SQL_SLEEP;
     my ($output,$code);
     for my $trys($try_from .. $try_to){
         if($TRUE eq $once || $trys > $try_from){
             $check_sql = qq{select 1;};
-            $timeout = $SQL_TIMEOUT;
+            $timeout = $COMMAND_TIMEOUT;
         }
-        ($code,$output) = executeCommand(qq{sudo timeout -s 9 $timeout sudo -iu $HS_PGUSER sh -c "psql -qtAX -h $HS_M_HSNM -p $HS_M_PORT template1 -c '$check_sql'" 2>&1});
+        ($code,$output) = executeCommand(qq{sudo timeout -s 9 $timeout sudo -iu $HS_PGUSER sh -c "timeout -s 9 $SQL_TIMEOUT psql -qtAX -h $HS_M_HSNM -p $HS_M_PORT template1 -c '$check_sql'" 2>&1});
         if($output =~ /FATAL:.*too many clients/ || $output =~ /FATAL:.*too many connections/){
             logMessage("WARN","Occur too many connections error, will ignore it, please check the database status");
             $code = 0;
@@ -1010,7 +1010,7 @@ sub main{
     getOption();
     checkOption();
     logMessage("INFO","Run command: ".$_[0]);
-    my ($code,$output) = executeCommand("timeout -s 9 1 sudo date > /dev/null 2>&1");
+    my ($code,$output) = executeCommand("timeout -s 9 6 sudo date > /dev/null 2>&1");
     if($code != 0){
         errorMessage("You must run this command use user which can sudo without password");
     }
