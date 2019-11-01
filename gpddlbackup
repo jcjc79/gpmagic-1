@@ -1381,24 +1381,33 @@ sub outputExtTable{
     my $index = 0;
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$relnatts,$relacl) = @$row;
-        ($relname,$relnamespace) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace});
+        my $raw_relname = decode($relname);
+        ($relname,$relnamespace) = (quote($raw_relname),$MAP_OF_SCHEMA{$relnamespace});
         if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
             next;
-        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
+        }elsif((!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}) && !exists $MAP_OF_PARTITION_OID{$oid}){
             outwarn("External table $relnamespace.$relname missing attributes");
             next;
+        }
+        if(exists $MAP_OF_PARTITION_OID{$oid}){
+            srand();
+            $relname = "ext_part_".int(rand(1E8)).int(rand(1E8)).int(rand(1E8));
         }
         my ($location,$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable) = @{$MAP_OF_EXTTABLE_FMT{$oid}};
         my $create = "CREATE ".($writable eq "t" ? "WRITABLE" : "READABLE")." EXTERNAL ".("" eq $command ? "TABLE " : "WEB TABLE ").$relnamespace.".".$relname."(\n";
         my @attibute_array;
-        for my $relattindex(1 .. $relnatts){
-            my $key = $oid."-".$relattindex;
-            my ($attname,$atttype,$attnotnull,$atthasdef) = @{$MAP_OF_ATTRIBUTE{$key}};
-            my $attr_sql = $attname."    ".$atttype;
-            if("t" eq $atthasdef){
-                $attr_sql = $attr_sql." DEFAULT ".$MAP_OF_ATTRDEF{$key};
+        if(exists $MAP_OF_PARTITION_OID{$oid}){
+            push @attibute_array,"LIKE ".$relnamespace.".".quote($raw_relname);
+        }else{
+            for my $relattindex(1 .. $relnatts){
+                my $key = $oid."-".$relattindex;
+                my ($attname,$atttype,$attnotnull,$atthasdef) = @{$MAP_OF_ATTRIBUTE{$key}};
+                my $attr_sql = $attname."    ".$atttype;
+                if("t" eq $atthasdef){
+                    $attr_sql = $attr_sql." DEFAULT ".$MAP_OF_ATTRDEF{$key};
+                }
+                push @attibute_array,$attr_sql;
             }
-            push @attibute_array,$attr_sql;
         }
         $create = $create.join(",\n",@attibute_array);
         $create = $create."\n)\n";
@@ -1445,9 +1454,27 @@ sub outputExtTable{
         $create = $create.";\n";
         outputTask($create,\$index,$TAIL_ExtTable);
         $relowner = $MAP_OF_ROLE{$relowner};
-        output(qq{ALTER EXTERNAL TABLE $relnamespace.$relname OWNER TO $relowner;});
-        if($relacl ne ""){
-            output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+        if(exists $MAP_OF_PARTITION_OID{$oid}){
+            my @partition_name = split(/_\d+_prt_/,$raw_relname);
+            my ($index,$max_index) = (0,@partition_name - 1);
+            my $exchange_sql = "";
+            for my $par(@partition_name){
+                if($index == 0){
+                    $exchange_sql = "ALTER TABLE ".$relnamespace.".".quote($par);
+                }elsif($index == $max_index){
+                    $exchange_sql = $exchange_sql." EXCHANGE PARTITION ".quote($par);
+                }else{
+                    $exchange_sql = $exchange_sql." ALTER PARTITION ".quote($par);
+                }
+                $index++;
+            }
+            output($exchange_sql." WITH TABLE ".$relnamespace.".".$relname." WITHOUT VALIDATION;");
+            output("DROP TABLE ".$relnamespace.".".$relname.";");
+        }else{
+            output(qq{ALTER EXTERNAL TABLE $relnamespace.$relname OWNER TO $relowner;});
+            if($relacl ne ""){
+                output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+            }
         }
     }
     outputRegionEnd(\$index,$TAIL_ExtTable);
