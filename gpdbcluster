@@ -420,6 +420,18 @@ END_OF_COMMAND));
     }
     return $CURRENT_ROLE;
 }
+sub checkStandbyIsAlive{
+    if($HS_S_HSNM eq ""){
+        return $FALSE;
+    }
+    logMessage("INFO","Check whether Standby is activated");
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "set -o pipefail;ps ax|grep postgres|grep -v grep|grep -w '\\-D'|grep -w '\\-p $HS_S_PORT'|wc -l" 2> /dev/null});
+    if($code == 0 && $output eq "0"){
+        return $FALSE;
+    }else{
+        return $TRUE;
+    }
+}
 sub checkStandbyIsActivated{
     if($HS_S_HSNM eq ""){
         return $FALSE;
@@ -605,8 +617,8 @@ sub firstCheckMasterStatus{
     }else{
         logMessage("WARN","Current Master status is BAD");
         readHealthStatus();
-        my $activate = checkStandbyIsActivated();
-        if($activate eq $FALSE){
+        my $alive = checkStandbyIsAlive();
+        if($alive eq $FALSE){
             ($code,$output) = startCluster();
             if($code != 0){
                 return $FALSE;
@@ -618,8 +630,13 @@ sub firstCheckMasterStatus{
                 return $TRUE;
             }
         }else{
-            logMessage("WARN","Standby have been activated, will exit");
-            exitMain(0);
+            my $activate = checkStandbyIsActivated();
+            if($activate eq $TRUE){
+                logMessage("WARN","Standby have been activated, will exit");
+                exitMain(0);
+            }
+            logMessage("WARN","Standby maybe is alive, will check later");
+            return $FALSE;
         }
     }
 }
