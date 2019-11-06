@@ -1,28 +1,31 @@
 CREATE OR REPLACE FUNCTION gp_toolkit.gp_table_file_info() RETURNS SETOF VARCHAR[] AS $$
 import os
 _rslt = plpy.execute("""select current_database() dbname, inet_server_port() port;""")
-(_dbname, _port) = (_rslt[0]["dbname"], _rslt[0]["port"])
+(_dbname, _port) = (_rslt[0]["dbname"], str(_rslt[0]["port"]))
 _rslt = plpy.execute("""select oid,dattablespace from pg_database where datname = '%s';""" % (_dbname))
-(_dboid, _dbspc) = (_rslt[0]["oid"], _rslt[0]["dattablespace"])
+(_dboid, _dbspc) = (str(_rslt[0]["oid"]), str(_rslt[0]["dattablespace"]))
 def getSqlValue(_sql):
     _utility = "PGOPTIONS='-c gp_session_role=utility' psql -v ON_ERROR_STOP=1"
-    _cmd="""%s -d '%s' -p %s -tAXF '|' 2>&1 <<_END_OF_SQL
-%s
-_END_OF_SQL
-""" % (_utility, _dbname, _port, _sql)
+    _cmd = """%s -d '%s' -p %s -tAXF '|' 2>&1 <<_END_OF_SQL\n""" % (_utility, _dbname, _port) + _sql + "\n_END_OF_SQL"
     try:
-        val=os.popen(_cmd).read()
+        val = os.popen(_cmd).read()
         return val.strip()
     except Exception, e:
         plpy.error(str(e))
 _dftpath = getSqlValue("""show data_directory""") + "/base/" + _dboid + "/"
-_rslt = plpy.execute("""select t.oid,trim(n.location_1)||'/'||t.oid||'/'||'%s'||'/' path
+_version = int(getSqlValue("""SELECT (string_to_array((string_to_array(version(),'Greenplum Database '))[2],'.'))[1];"""))
+_rslt
+if _version < 6:
+    _rslt = plpy.execute("""select t.oid,trim(n.location_1)||'/'||t.oid||'/'||'%s'||'/' path
     from pg_tablespace t,pg_filespace f,gp_persistent_filespace_node n
     where t.spcfsoid = f.oid and f.oid = n.filespace_oid;""" % (_dboid))
+else:
+    _dirc = getSqlValue("""show data_directory""")
+    _rslt = plpy.execute("""select t.oid,'%s'||'/pg_tblspc'||t.oid||'/'||'GPDB_*'||'/%s/' path from pg_tablespace t;""" % (_dirc,_dboid))
 _spcarray = []
-_spcarray.append([1663, _dftpath])
+_spcarray.append([str(1663), _dftpath])
 for _row in _rslt:
-    (_spcoid, _spcpath) = (_row["oid"], _row["path"])
+    (_spcoid, _spcpath) = (str(_row["oid"]), _row["path"])
     if not(os.path.exists(_spcpath)):
         continue
     if os.path.isfile(_spcpath):
@@ -38,7 +41,7 @@ for _spcinfo in _spcarray:
     for _row in _rslt.split("\n"):
         (_relfile, _size, _time) = _row.split("\t")
         _relfile = _relfile.split(".")[0]
-        _key = str(_spcoid) + "-" + _relfile
+        _key = _spcoid + "-" + _relfile
         if _sizemap.has_key(_key):
             _sizemap[_key] = [_sizemap[_key][0] + int(_size), _sizemap[_key][1] + 1, _sizemap[_key][2] + "\n" + _time]
         else:
@@ -48,43 +51,44 @@ _rslt = plpy.execute("""select n.nspname,c.relname,c.reltablespace,c.relfilenode
     and c.relkind = 'r' and c.relstorage <> 'x' and c.reltablespace <> 1664 and not c.relhassubclass
     and n.nspname not like E'pg\_temp\_%' and n.nspname not like E'pg\_toast\_temp\_%';""")
 for _row in _rslt:
-    (_nspname, _relname, _relspc) = (_row["nspname"], _row["relname"], _row["reltablespace"])
-    (_relfile, _storage) = ( _row["relfilenode"], _row["relstorage"])
+    (_nspname, _relname, _relspc) = (_row["nspname"], str(_row["relname"]), str(_row["reltablespace"]))
+    (_relfile, _storage) = (str(_row["relfilenode"]), _row["relstorage"])
     if _relspc == "0":
         _relspc = _dbspc
     _key = _relspc + "-" + _relfile
     if _sizemap.has_key(_key):
         if _storage == "h":
-            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], _sizemap[_key][2])
+            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], _relspc, _sizemap[_key][2])
         else:
-            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], None)
+            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], _relspc, None)
     else:
         yield (_nspname, _relname, 0, 0, None)
 $$ LANGUAGE PLPYTHONU;
 /**
-gp_toolkit.gp_table_file_info()å‡½æ•°è¿”å›æ•°ç»„,ä¿¡æ¯åˆ†åˆ«ä¸º:
-1ã€schemaåç§°
-2ã€tableåç§°
-3ã€æ–‡ä»¶å°ºå¯¸
-4ã€æ–‡ä»¶ä¸ªæ•°
-æŸ¥è¯¢ç»“æœå­—æ®µä¿¡æ¯:
-1ã€schemaåç§°
-2ã€tableåç§°
-3ã€æ–‡ä»¶å°ºå¯¸[å…¨é›†ç¾¤]
-4ã€æ–‡ä»¶ä¸ªæ•°[å…¨é›†ç¾¤]
-5ã€é¢„æœŸæ–‡ä»¶æ•°[å¦‚æœæ˜¯è¡Œå­˜-æ¯ä¸ªå®ä¾‹è®°ä¸º1ä¸ª-å¦‚æœæ˜¯åˆ—å­˜-æ¯ä¸ªå®ä¾‹è®°ä¸ºåˆ—çš„ä¸ªæ•°]
-6ã€æ–‡ä»¶æ•°æ¯”ä¾‹[æ€»æ–‡ä»¶æ•° / é¢„æœŸæ–‡ä»¶æ•°]
-7ã€å°ºå¯¸æœ€å°å®ä¾‹çš„å°ºå¯¸
-8ã€å°ºå¯¸æœ€å¤§å®ä¾‹çš„å°ºå¯¸
-9ã€Heapè¡¨çš„æ‰€æœ‰æ–‡ä»¶æ—¶é—´æˆ³çš„MD5å€¼-ç”¨äºè¯†åˆ«Heapè¡¨æ˜¯å¦å‘ç”Ÿè¿‡å˜åŒ–
+gp_toolkit.gp_table_file_info()º¯Êı·µ»ØÊı×é,ĞÅÏ¢·Ö±ğÎª:
+1¡¢schemaÃû³Æ
+2¡¢tableÃû³Æ
+3¡¢ÎÄ¼ş³ß´ç
+4¡¢±í¿Õ¼äID
+5¡¢ÎÄ¼ş¸öÊı
+²éÑ¯½á¹û×Ö¶ÎĞÅÏ¢:
+1¡¢schemaÃû³Æ
+2¡¢tableÃû³Æ
+3¡¢ÎÄ¼ş³ß´ç[È«¼¯Èº]
+4¡¢ÎÄ¼ş¸öÊı[È«¼¯Èº]
+5¡¢Ô¤ÆÚÎÄ¼şÊı[Èç¹ûÊÇĞĞ´æ-Ã¿¸öÊµÀı¼ÇÎª1¸ö-Èç¹ûÊÇÁĞ´æ-Ã¿¸öÊµÀı¼ÇÎªÁĞµÄ¸öÊı]
+6¡¢ÎÄ¼şÊı±ÈÀı[×ÜÎÄ¼şÊı / Ô¤ÆÚÎÄ¼şÊı]
+7¡¢³ß´ç×îĞ¡ÊµÀıµÄ³ß´ç
+8¡¢³ß´ç×î´óÊµÀıµÄ³ß´ç
+9¡¢Heap±íµÄËùÓĞÎÄ¼şÊ±¼ä´ÁµÄMD5Öµ-ÓÃÓÚÊ¶±ğHeap±íÊÇ·ñ·¢Éú¹ı±ä»¯
 **/
 select nspname, relname, tablesize, filecount, expectfilecount,
-    filecount / expectfilecount filecountratio, minsize, maxsize, fileflag from (
+    round(filecount / expectfilecount,1) filecountratio, minsize, maxsize, fileflag from (
     select size[1] as nspname, size[2] as relname,
         sum(size[3]::bigint) tablesize,string_agg(size[3],','), sum(size[4]::bigint) filecount,
         min(size[3]::bigint) minsize,
         max(size[3]::bigint) maxsize,
-        md5(string_agg(size[5],E'\n' order by segment_id)) fileflag from (
+        md5(string_agg(size[6],E'\n' order by segment_id)) fileflag from (
         select gp_toolkit.gp_table_file_info() size, gp_segment_id segment_id from gp_dist_random('gp_id')
      ) x group by 1,2
 ) x left join (
@@ -99,3 +103,17 @@ select nspname, relname, tablesize, filecount, expectfilecount,
         select count(*) as segs from gp_segment_configuration where role = 'p' and content <> -1
     ) y
 ) y using(nspname, relname) order by 6 desc;
+
+SELECT '20190722', nspname, relname, tableowner, spcname, tablesize, relstorage FROM (
+    SELECT size[1] AS nspname, size[2] AS relname, sum(size[3]::bigint) tablesize, max(size[5]::bigint) tspoid FROM (
+        SELECT gp_toolkit.gp_table_file_info() size, gp_segment_id segment_id FROM gp_dist_random('gp_id')
+     ) x GROUP BY 1,2
+) x LEFT JOIN (
+    SELECT nspname, relname, tableowner, relstorage FROM (
+        SELECT nspname, relname, pg_get_userbyid(c.relowner) AS tableowner, c.relstorage
+        FROM pg_namespace n, pg_class c
+        WHERE n.oid = c.relnamespace 
+        AND c.relkind = 'r' AND c.relstorage <> 'x' AND c.reltablespace <> 1664 AND NOT c.relhassubclass
+        AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%'
+    ) y
+) y USING(nspname, relname) LEFT JOIN pg_tablespace t ON x.tspoid = t.oid;
