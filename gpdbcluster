@@ -390,9 +390,20 @@ sub writeHealthStatus{
     closeHealthStatusFile();
 }
 sub checkMasterOrStandby{
-    my $master_data_directory = $ENV{"MASTER_DATA_DIRECTORY"};
+    my $master_data_directory = "";
     if($START_ROLE eq "Standby"){
         $master_data_directory = $HS_S_PGDD;
+    }elsif($START_ROLE eq "Master"){
+        $master_data_directory = $HS_M_PGDD;
+    }
+    if($master_data_directory eq ""){
+        my ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh -c 'echo \$MASTER_DATA_DIRECTORY' 2>&1));
+        if($code == 0){
+            $master_data_directory = $output;
+        }
+    }
+    if($master_data_directory eq ""){
+        errorMessage("Master data directory is not found");
     }
     my ($code,$output) = executeCommand(qq(sudo timeout -s 9 $SQL_TIMEOUT sudo -iu $HS_PGUSER sh 2>&1 <<'END_OF_COMMAND'
 if [ -e "$master_data_directory" ];then pg_controldata $master_data_directory|grep 'Database cluster state'|awk -F ':' '{print \$NF}';else exit 1;fi
@@ -425,7 +436,7 @@ sub checkStandbyIsAlive{
         return $FALSE;
     }
     logMessage("INFO","Check whether Standby is activated");
-    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "set -o pipefail;ps ax|grep postgres|grep -v grep|grep -w '\\-D'|grep -w '\\-p $HS_S_PORT'|wc -l" 2> /dev/null});
+    my ($code,$output) = executeCommand(qq{sudo timeout -s 9 $COMMAND_TIMEOUT sudo -iu $HS_PGUSER ssh $HS_S_HSNM -T "ps ax|grep postgres|grep -v grep|grep -w '\\-D'|grep -w '\\-p $HS_S_PORT'|wc -l" 2> /dev/null});
     if($code == 0 && $output eq "0"){
         return $FALSE;
     }else{
