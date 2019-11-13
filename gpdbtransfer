@@ -1337,7 +1337,7 @@ sub getAOLastStatFromCatalog{
     my @query_array = ();
     my ($ao_index, $all_index) = (0, 0);
     for my $row(@TABLE_ARRAY){
-        my ($ao,$scma,$rel,$typ,$tim) = @$row;
+        my ($ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
         $all_index += 1;
         if($typ eq "a"){
             if("" eq $ao){
@@ -1368,7 +1368,7 @@ sub getHeapLastStatFromCatalog{
     my @query_array = ();
     my ($heap_index, $all_index) = (0, 0);
     for my $row(@TABLE_ARRAY){
-        my ($ao,$scma,$rel,$typ,$tim) = @$row;
+        my ($ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
         $all_index += 1;
         if($typ eq "h"){
             my $query_sql = qq{select '$scma','$rel',md5(string_agg(id||','||t, chr(10) order by id,t)) from(\n};
