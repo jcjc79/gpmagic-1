@@ -10,7 +10,7 @@ use Fcntl qw(:flock);
 use POSIX;
 
 my ($SRC_HOST,$SRC_PORT,$SRC_USER,$SRC_PASSWD,$SRC_DATABASE,$DES_HOST,$DES_PORT,$DES_USER,$DES_PASSWD,$DES_DATABASE,
-    $KEY,$SRC_MAPFILE,$BY_LEAF,$FORCE,$FORCE_OWNER,$MASTER_ONLY,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,
+    $KEY,$SRC_MAPFILE,$BY_LEAF,$FORCE,$FORCE_OWNER,$MASTER_ONLY,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,$UNIGNORE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,
     $INCREMENT,$IGNORE_CHECK,$IGNORE_HBA,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
 my (%SRC_HOSTMAP,%HASH_REPLICATION_TABLE,$TASK_QUEUE,$MSG_QUEUE,$LOG_FILE_HANDLE);
 my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$SQL_BATCH) = (20,6,1,300);
@@ -233,6 +233,8 @@ LOCK=`echo "$LOCK"|base64 -di`
 ENCD=${ARGV[12]}
 SEED=${ARGV[13]}
 COMP=${ARGV[14]}
+UNCOMP=""
+if [ "$COMP" == "gzip" ];then UNCOMP="gunzip";elif [ "$COMP" == "zstd" ];then UNCOMP="unzstd";fi
 WHERE=${ARGV[15]}
 WHERE=`echo "$WHERE"|base64 -di`
 NMBR=`cat $KEY.info|wc -l`
@@ -243,7 +245,7 @@ COPYQ="COPY (SELECT * FROM \"$SCMA\".\"$REL\"$WHERE) TO STDOUT;"
 if [ "" == "$WHERE" ];then
     COPYQ="COPY \"$SCMA\".\"$REL\" TO STDOUT;"
 fi
-if [[ "TEST" == "$WHERE" && $COMP == 1 ]];then
+if [[ "TEST" == "$WHERE" && "$COMP" != "0" ]];then
     for RIP in `cat $KEY.info|awk -F ',' '{print \\$2}'|sort|uniq`;do
         MSG=`ssh $USER@$RIP -T "echo 1"`
         ERR=$?;if [[ $ERR -ne 0 || $MSG -ne 1 ]];then exit 2;fi
@@ -254,7 +256,7 @@ if [ "M" == "$TYPE" ];then
     RARRAY=(${RINFO//,/ })
     RIP=${RARRAY[1]}
     RPORT=${RARRAY[2]}
-    if [ $COMP == 0 ];then
+    if [ "$COMP" == "0" ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
@@ -263,11 +265,11 @@ END_OF_PSQL
         ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
     else
 set -o pipefail
-ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |gunzip
+ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |$UNCOMP
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\$\\$'){system("kill -9 "\\$1)}}' >/dev/null 2>&1
 . $GPHOME/greenplum_path.sh
 set -o pipefail
-PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
+PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |$COMP -c -f -1
 $LOCK;
 $COPYQ
 END_OF_INNER_SHELL
@@ -287,7 +289,7 @@ else
             CCNTT=`PGOPTIONS='-c gp_session_role=utility' PGUSER=$USER psql -qtAX -h $RIP -p $RPORT -d $DBNM -c "show gp_contentid"`
             ERR=$?;if [[ $ERR -ne 0 || "$CCNTT" != "$RCNTT" ]];then exit 1;fi
         else
-            if [ $COMP == 0 ];then
+            if [ "$COMP" == "0" ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
@@ -296,11 +298,11 @@ END_OF_PSQL
                 ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
             else
 set -o pipefail
-ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |gunzip
+ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |$UNCOMP
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\$\\$'){system("kill -9 "\\$1)}}' >/dev/null 2>&1
 . $GPHOME/greenplum_path.sh
 set -o pipefail
-PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
+PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |$COMP -c -f -1
 $LOCK;
 $COPYQ
 END_OF_INNER_SHELL
@@ -357,7 +359,7 @@ $CMD_NAME --src-host hostname
     [--analyze]
     [--encoding encoding]
     [-B batch_size]
-    [--compress]
+    [--compress method]
     [--where condition]
     [--log-path directory]
     [--parameter-file | --pf filename]
@@ -544,6 +546,13 @@ OPTIONS
   You should specify the qualified table name as format:
   schema.relation
 
+--unignore <table-file>
+
+  The location and name of file containing list of fully qualified table names to copy from the source database ignore the increment check.
+  In the text file, you should specify a single fully qualified table per line.
+  You should specify the qualified table name as format:
+  schema.relation
+
 -s <schema name>
 
   Transfer tables in this schema.
@@ -603,10 +612,15 @@ OPTIONS
   The max is $BATCH_MAX.
   The min is $BATCH_MIN.
 
---compress
+--compress <method>
 
   Specify this option to enable compress stream transfer between src cluster and destination cluster.
   If use compress option, you should make sure all destination segment can ssh to all src segment(include master) without password.
+  Current support gzip and zstd compression method.
+  You should make sure all the source and destination hosts have installed the compression rpm.
+
+  eg.
+  -t myschema.src_table
 
 --where <condition>
 
@@ -805,10 +819,10 @@ sub getOption{
         'key:i'        => \$KEY,          'src-mapfile:s'       => \$SRC_MAPFILE,    'by-leaf!'    => \$BY_LEAF,    'force!'        => \$FORCE,       'owner'           => \$FORCE_OWNER,
         'from-master!' => \$MASTER_ONLY,
         't:s'          => \@TABLE_ARRAY,  'T:s'                 => \@EX_TABLE_ARRAY,
-        'f:s'          => \$TABLE_FILE,   'F:s'                 => \$EX_TABLE_FILE,
+        'f:s'          => \$TABLE_FILE,   'F:s'                 => \$EX_TABLE_FILE,  'unignore:s'  => \$UNIGNORE_FILE,
         's:s'          => \@SCHEMA_ARRAY, 'S:s'                 => \@EX_SCHEMA_ARRAY,
         'increment!'   => \$INCREMENT,    'ignore-check!'       => \$IGNORE_CHECK,   'ignore_hba'  => \$IGNORE_HBA, 'delete!'       => \$NEED_DELETE,  'truncate!'      => \$NEED_TRUNCATE,
-        'analyze!'     => \$NEED_ANALYZE, 'encoding:s'          => \$ENCODING,       'B:i'         => \$BATCH_SIZE, 'compress!'     => \$COMPRESS,     'where:s'        => \$GLOBAL_CONDITION,
+        'analyze!'     => \$NEED_ANALYZE, 'encoding:s'          => \$ENCODING,       'B:i'         => \$BATCH_SIZE, 'compress:s'    => \$COMPRESS,     'where:s'        => \$GLOBAL_CONDITION,
         'log-path:s'   => \$LOG_PATH,     'parameter-file|pf:s' => \$PARAMETER_FILE, 'h|help!'     => \$IS_HELP,    'version!'      => \$VERSION,
     );
     if(@ARGV != 0){
@@ -847,6 +861,7 @@ sub getOption{
             if("T"             eq $para                            ){push @EX_TABLE_ARRAY  ,$val;}
             if("f"             eq $para && "" eq $TABLE_FILE       ){$TABLE_FILE           =$val;}
             if("F"             eq $para && "" eq $EX_TABLE_FILE    ){$EX_TABLE_FILE        =$val;}
+            if("unignore"      eq $para && "" eq $UNIGNORE_FILE    ){$$UNIGNORE_FILE       =$val;}
             if("s"             eq $para                            ){push @SCHEMA_ARRAY    ,$val;}
             if("S"             eq $para                            ){push @EX_SCHEMA_ARRAY ,$val;}
             if("increment"     eq $para && "" eq $INCREMENT        ){$INCREMENT            =1   ;}
@@ -857,7 +872,7 @@ sub getOption{
             if("analyze"       eq $para && "" eq $NEED_ANALYZE     ){$NEED_ANALYZE         =1   ;}
             if("encoding"      eq $para && "" eq $ENCODING         ){$ENCODING             =$val;}
             if("B"             eq $para && "" eq $BATCH_SIZE       ){$BATCH_SIZE           =$val;}
-            if("compress"      eq $para && "" eq $COMPRESS         ){$COMPRESS             =1   ;}
+            if("compress"      eq $para && "" eq $COMPRESS         ){$COMPRESS             =$val;}
             if("where"         eq $para && "" eq $GLOBAL_CONDITION ){$GLOBAL_CONDITION     =$val;}
             if("log-path"      eq $para && "" eq $LOG_PATH         ){$LOG_PATH             =$val;}
         }
@@ -942,7 +957,7 @@ sub checkOption{
     logMessage("INFO","Option values: --des-host $DES_HOST --des-port $DES_PORT --des-user $DES_USER --des-passwd ****** --des-database $DES_DATABASE");
     logMessage("INFO","Option values: --key $KEY --src-mapfile $SRC_MAPFILE --by-leaf $BY_LEAF --force $FORCE --owner $FORCE_OWNER --from-master $MASTER_ONLY");
     logMessage("INFO","Option values: -t ".join(' -t ',@TABLE_ARRAY)." -T ".join(' -T ',@EX_TABLE_ARRAY));
-    logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE");
+    logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE --unignore $UNIGNORE_FILE");
     logMessage("INFO","Option values: -s ".join(' -s ',@SCHEMA_ARRAY)." -S ".join(' -S ',@EX_SCHEMA_ARRAY));
     logMessage("INFO","Option values: --increment $INCREMENT --ignore-check $IGNORE_CHECK --ignore-hba $IGNORE_HBA --delete $NEED_DELETE --truncate $NEED_TRUNCATE --analyze $NEED_ANALYZE --encoding $ENCODING -B $BATCH_SIZE");
     logMessage("INFO","Option values: --compress $COMPRESS --where $GLOBAL_CONDITION --log-path $LOG_PATH --parameter-file $PARAMETER_FILE");
@@ -951,7 +966,12 @@ sub checkOption{
             $$ref = trim(decode(substr($$ref,6)));
         }
     }
-    $COMPRESS = "" eq $COMPRESS ? 0 : 1;
+    $COMPRESS = lc($COMPRESS);
+    if($COMPRESS eq ""){
+        $COMPRESS = "0";
+    }elsif($COMPRESS ne "gzip" && $COMPRESS ne "zstd"){
+        errorMessage("Current only support gzip and zstd compression method");
+    }
 }
 sub getKeyWord{
     my @result = queryResult("DES",$SQL_GET_KEY_WORD);
@@ -1017,7 +1037,7 @@ sub checkSrcCluster{
     }else{
         logMessage("INFO","SRC function gp_toolkit.gp_transfer_execute is OK");
     }
-    if($COMPRESS > 0){
+    if($COMPRESS ne "0"){
         $SRC_GPHOME = queryResult("SRC",q{select gp_toolkit.gp_transfer_execute('echo $GPHOME')},"Scalar");
     }else{
         $SRC_GPHOME = " ";
@@ -1393,6 +1413,18 @@ sub processLastTransferStat{
     my %last_stat_from_file = getLastStatFromFile();
     my %ao_last_stat_from_cata = getAOLastStatFromCatalog();
     my %heap_last_stat_from_cata = getHeapLastStatFromCatalog();
+    my %unignore_table_hash = ();
+    if($INCREMENT){
+        for my $row(getTableFromFile($UNIGNORE_FILE)){
+            my ($table) = @$row;
+            my ($scma,$rel) = split(/\./,$table,2);
+            if(illegal($scma,$rel)){
+                logMessage("WARN","Table name in file is not legal:[$table]");
+                next;
+            }
+            $unignore_table_hash{$table} = ""
+        }
+    }
     my @temp_table_array = ();
     my $ignore_count = 0;
     for my $row(@TABLE_ARRAY){
@@ -1409,7 +1441,7 @@ sub processLastTransferStat{
             if(exists $last_stat_from_file{$src_table}){
                 ($f_md5,$f_count) = @{$last_stat_from_file{$src_table}};
             }
-            if("" eq $f_md5 || $f_md5 ne $md5){
+            if("" eq $f_md5 || $f_md5 ne $md5 || exists $unignore_table_hash{$src_table}){
                 push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$md5,0)];
             }else{
                 $ignore_count ++;
@@ -1420,7 +1452,7 @@ sub processLastTransferStat{
             if(exists $last_stat_from_file{$src_table}){
                 ($f_tim,$f_count) = @{$last_stat_from_file{$src_table}};
             }
-            if("" eq $f_tim || $f_tim ne $src_tim || $count ne $f_count){
+            if("" eq $f_tim || $f_tim ne $src_tim || $count ne $f_count || exists $unignore_table_hash{$src_table}){
                 push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count)];
             }else{
                 $ignore_count ++;
