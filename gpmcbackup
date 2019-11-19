@@ -9,7 +9,7 @@ use Fcntl qw(:flock);
 use POSIX;
 
 my ($DATABASE_NAME,$PORT,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$BATCH_SIZE,$DIRECTORY,$GLOBAL_CONDITION,$TIME_FLAG,$FULL_MODE,$INCREMENT,$RESIDUE,
-    $FORCE_REDO,$DATA_ONLY,$NEED_TRUNCATE,$NO_ERROR_TABLE,$ENCODING,$FAST,$PARAMETER_FILE,$IS_HELP,$VERSION);
+    $FORCE_REDO,$DATA_ONLY,$NEED_TRUNCATE,$NO_ERROR_TABLE,$ENCODING,$COMPRESS,$TAIL,$PARAMETER_FILE,$IS_HELP,$VERSION);
 my ($MASTER_BACKUP_PATH,$MASTER_LOG_PATH,$MASTER_LOG_FILE,$MASTER_DONE_FILE,$LOG_FILE_HANDLE);
 my ($FULL_FILE_NAME,$LAST_STAT_FILE_NAME,$LOG_FILE_NAME,$DONE_FILE_NAME,$ALLTABLE_FILE_NAME,$FULLFILL_STAT_FILE_NAME) = ("backup_full.tag","last_stat.tag","backup_log.log","backup_done.log","all_table.tag","fullfill.tag");
 my ($TASK_QUEUE,$MSG_QUEUE);
@@ -212,9 +212,9 @@ my $BACKUP_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by 
     )a,pg_type t where t.oid=a.typs[a.idx];};
 my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar,int4";
 my $BACKUP_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "cea85e7da59a08d55b0c1bcb59876ea9";
+my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "33d397a1e1a69baccec768dfbb75343a";
 my $BACKUP_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_backup_function(dbname varchar,port int,content int,path varchar,
-    tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar,onnumber int)returns bigint as $$
+    tbname varchar,dtflag bigint,whr varchar,encoding varchar,compress varchar,onnumber int)returns bigint as $$
 import os,commands,time
 def printLog(flag,str):
     fname="%s/db_dumps/%s/backup_%s_log.log" % (path,dtflag,content)
@@ -233,16 +233,24 @@ try:
     dirc="%s/db_dumps/%s" % (path,dtflag)
     fname="%s^%s^%s" % (dbname,content,grid)
     (scma,rel)=grid.split(".",1)
-    level=""
-    if "1"==fast:
-        level="-1 "
+    comp=" > "+dirc+"/"+fname+".tmp"
+    move="mv "+dirc+"/"+fname+".tmp"+" "+dirc+"/"+fname
+    tail=""
+    if "gzip"==compress:
+        comp="|gzip -1"+comp
+        move=move+".gz"
+        tail=".gz"
+    elif "zstd"==compress:
+        comp="|zstd -1"+comp
+        move=move+".zst"
+        tail=".zst"
     copyq="""copy (select * from "%s"."%s"%s) to STDOUT;""" % (scma,rel,whr)
     if ""==whr:
         copyq="""copy "%s"."%s" to STDOUT;""" % (scma,rel)
     if onnumber!=-1 and content!=onnumber:
         copyq=""
     cmd="set -o pipefail\n"+"PGOPTIONS='-c gp_session_role=utility -c client_encoding="+encoding+"' psql -qtAX -v ON_ERROR_STOP=1 -d '"+dbname+"' -p "+str(port)
-    cmd+=" <<'_END_OF_SQL'|gzip "+str(level)+"> "+dirc+"/"+fname+".tmp\n"+copyq+"\n_END_OF_SQL\n"+"mv "+dirc+"/"+fname+".tmp"+" "+dirc+"/"+fname+".gz"
+    cmd+=" <<'_END_OF_SQL'"+comp+"\n"+copyq+"\n_END_OF_SQL\n"+move
     printLog("BEGIN","")
     (cod,val)=commands.getstatusoutput(cmd)
     if len(val)>0:
@@ -255,7 +263,7 @@ try:
         plpy.error("Unknown error with code: %s" % (cod))
     else:
         printLog("SUCCESS","")
-        return os.path.getsize(dirc+"/"+fname+".gz")
+        return os.path.getsize(dirc+"/"+fname+tail)
 except Exception, e:
     if sign==0:
         printLog("ERROR",str(e))
@@ -440,9 +448,16 @@ OPTIONS
 
   Backup data with this encoding, the default is UTF8.
 
---fast
 
-  Backup data with fast compression.
+--compress <method>
+
+  Specify this option to enable compress for backup files.
+  Current support gzip and zstd compression method.
+  You should make sure all the hosts have installed the compression rpm.
+
+  eg.
+  --compress gzip
+  --compress zstd
 
 --parameter-file <parameter_file>
 
@@ -596,7 +611,7 @@ sub getOption{
         'increment!'       => \$INCREMENT,        'residue:i'   => \$RESIDUE,
         'force-redo!'      => \$FORCE_REDO,       'a!'          => \$DATA_ONLY,
         'truncate!'        => \$NEED_TRUNCATE,    'no-error!'   => \$NO_ERROR_TABLE,
-        'encoding:s'       => \$ENCODING,         'fast!'       => \$FAST,
+        'encoding:s'       => \$ENCODING,         'compress:s'  => \$COMPRESS,
         'parameter-file:s' => \$PARAMETER_FILE,   'h|help!'     => \$IS_HELP,
         'version!'         => \$VERSION,
     );
@@ -634,7 +649,7 @@ sub getOption{
             if("truncate"     eq $para && "" eq $NEED_TRUNCATE    ){$NEED_TRUNCATE         = 1   ;}
             if("no-error"     eq $para && "" eq $NO_ERROR_TABLE   ){$NO_ERROR_TABLE        = 1   ;}
             if("encoding"     eq $para && "" eq $ENCODING         ){$ENCODING              = $val;}
-            if("fast    "     eq $para && "" eq $FAST             ){$FAST                  = 1   ;}
+            if("compress"     eq $para && "" eq $COMPRESS         ){$COMPRESS              = $val;}
         }
     }
     $DIRECTORY =~ s/\/*\s*$//;
@@ -675,7 +690,14 @@ sub checkOption{
     logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE -s ".join(' -s ',@SCHEMA_ARRAY)." -S ".join(' -S ',@EX_SCHEMA_ARRAY));
     logMessage("INFO","Option values: -B $BATCH_SIZE --directory $DIRECTORY --where $GLOBAL_CONDITION --time-flag $TIME_FLAG");
     logMessage("INFO","Option values: --full $FULL_MODE --increment $INCREMENT --residue $RESIDUE --force-redo $FORCE_REDO");
-    logMessage("INFO","Option values: -a $DATA_ONLY --truncate $NEED_TRUNCATE --no-error $NO_ERROR_TABLE --encoding $ENCODING --fast $FAST --parameter-file $PARAMETER_FILE");
+    logMessage("INFO","Option values: -a $DATA_ONLY --truncate $NEED_TRUNCATE --no-error $NO_ERROR_TABLE --encoding $ENCODING --compress $COMPRESS --parameter-file $PARAMETER_FILE");
+    $COMPRESS = lc($COMPRESS);
+    if($COMPRESS eq ""){
+        $COMPRESS = "0";
+    }elsif($COMPRESS ne "gzip" && $COMPRESS ne "zstd"){
+        errorMessage("Current only support gzip and zstd compression method");
+    }
+    $TAIL = $COMPRESS eq "gzip" ? ".gz" : $COMPRESS eq "zstd" ? ".zst" : "";
 }
 sub getVersion{
     my $versionString = queryResult("SELECT version();","Scalar");
@@ -843,12 +865,13 @@ sub getMergeCommand{
         }
         my @pre_stat_list = readLineFromFile($MASTER_BACKUP_PATH.$time."/".$LAST_STAT_FILE_NAME);
         for my $line(@pre_stat_list){
-            my $table = (split(/;/,$line))[1];
+            my @array = split(/;/,$line);
+            my ($table,$tail) = ($array[1],$array[-1]);
             if(exists $alltable_hash{$table} && !exists $stat_hash{$table}){
                 $stat_hash{$table} = "";
                 push @stat_list,$line;
                 my ($dbname,$scma,$rel) = split(/\./,$table);
-                push @merge_cmd,'N='.$dbname.'^$C^'.$scma.'.'.$rel.'.gz;F='.$time.'/$N;T='.$merge_time.'/$N;if [ -f $F ];then mv $F $T;elif [ ! -f $T ];then echo $P/$T$M;exit 1;fi';
+                push @merge_cmd,'N='.$dbname.'^$C^'.$scma.'.'.$rel."$tail;F=".$time.'/$N;T='.$merge_time.'/$N;if [ -f $F ];then mv $F $T;elif [ ! -f $T ];then echo $P/$T$M;exit 1;fi';
             }
         }
     }
@@ -1262,7 +1285,7 @@ sub executeBackup{
         my @stat_msg :shared;
         my $query = qq{begin;LOCK TABLE $table_qq IN ACCESS SHARE MODE NOWAIT;};
         $query = $query.qq{select sum(gp_toolkit.gp_backup_function('$DATABASE_NAME',database_port,database_content,};
-        $query = $query.qq{$path,'$table',$TIME_FLAG,'$where','$ENCODING','$FAST',$on_number)) from gp_dist_random('gp_toolkit.gp_segment_config');};
+        $query = $query.qq{$path,'$table',$TIME_FLAG,'$where','$ENCODING','$COMPRESS',$on_number)) from gp_dist_random('gp_toolkit.gp_segment_config');};
         $query = $query.qq{end;};
         my @info_msg :shared = ("INFO","Start backup table $full_name");
         $MSG_QUEUE->enqueue(\@info_msg);
@@ -1292,10 +1315,8 @@ sub executeMessage{
             if("SUCCESS" eq $type){
                 $success_index += 1;
                 my $base64_name = trim(encode($full_name));
-                if("" ne $last_stat){
-                    my $stat_record = $base64_name.";".$full_name.";".$last_stat;
-                    system(qq{sed '/^$base64_name;/d' -i $MASTER_LOG_PATH/$LAST_STAT_FILE_NAME\necho '$stat_record' >> $MASTER_LOG_PATH/$LAST_STAT_FILE_NAME});
-                }
+                my $stat_record = $base64_name.";".$full_name.";".$last_stat.";".$TAIL;
+                system(qq{sed '/^$base64_name;/d' -i $MASTER_LOG_PATH/$LAST_STAT_FILE_NAME\necho '$stat_record' >> $MASTER_LOG_PATH/$LAST_STAT_FILE_NAME});
                 my $done_record = $base64_name.";".$full_name;
                 system(qq{sed '/^$base64_name;/d' -i $MASTER_DONE_FILE\necho '$done_record' >> $MASTER_DONE_FILE});
                 logMessage($type,"($success_index/$error_index/$tables_size) $full_name".$msg);
