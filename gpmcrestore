@@ -106,12 +106,21 @@ FLNM=${FLNM#*.}
 SCMA=${FLNM%%.*}
 TBNM=${FLNM#*.}
 CNTT=`PGOPTIONS='-c gp_session_role=utility' psql -qtAX -d postgres -p $PORT -c "show gp_contentid"`
-FILE=$DIRC/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM.gz
+FILE=$DIRC/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM
 if [ "$SELF" == "1" ];then
-FILE=$DIRC/gpseg$CNTT/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM.gz
+FILE=$DIRC/gpseg$CNTT/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM
 fi
 set -o pipefail
-cat $FILE|gunzip
+if [ -e $FILE ];then
+    cat $FILE
+elif [ -e $FILE.gz ];then
+    cat $FILE.gz|gunzip
+elif [ -e $FILE.zst ];then
+    cat $FILE.zst|unzstd
+else
+    echo "File $FILE not exists" >&2
+    exit 1
+fi
 ERR=$?
 if [ $ERR -ne 0 ];then
 exit $ERR
@@ -747,7 +756,8 @@ sub getLastBackupStatFromFile{
             next;
         }
         for my $row(readLineFromFile($stat_file)){
-            my ($base64_name,$full_name) = split(/;/,$row,3);
+            my @array = split(/;/,$row);
+            my ($full_name) = ($array[1]);
             my ($dbname,$table) = split(/\./,$full_name,2);
             if($dbname ne $BACKUP_DB){
                 next;
