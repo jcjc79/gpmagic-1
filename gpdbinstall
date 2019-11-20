@@ -1710,6 +1710,7 @@ if [ -f $nprocname ];then
     echo 'root       soft    nproc     unlimited' >> $nprocname
 fi
 ##################################################################################
+IFS=" = "
 echo -n 'kernel.shmmax = 50000000000
 kernel.shmmni = 40960
 kernel.shmall = 40000000000
@@ -1741,8 +1742,11 @@ vm.dirty_background_ratio = 0
 vm.dirty_ratio = 0
 vm.dirty_background_bytes = 1610612736
 vm.dirty_bytes = 4294967296
-vm.zone_reclaim_mode = 0
-'|awk -F ' = ' '{if(length($2)>0)system("sed -e /"$1"/d -i /etc/sysctl.conf;echo "$1" = "$2" >> /etc/sysctl.conf")}'
+vm.zone_reclaim_mode = 0'|while read key val;do
+sed -e /$key/d -i /etc/sysctl.conf
+echo "$key = $val" >> /etc/sysctl.conf
+done
+unset IFS
 sysctl -p                                                                         > /dev/null 2>&1
 ##################################################################################
 localfile="/etc/rc.d/rc.local"
