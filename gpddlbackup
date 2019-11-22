@@ -10,7 +10,7 @@ use POSIX;
 
 my ($DATABASE_NAME,$PORT,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,$TO_FILE,$TARGET_VERSION,$RELOPTION_FILE,$IS_HELP,$VERSION);
 my (%SET_OF_INCLUDE_SCHEMA,$INCLUDE_SCHEMA_SIZE,%SET_OF_EXCLUDE_SCHEMA);
-my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
+my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_RESOURCE_GROUP,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
     %MAP_OF_ATTRIBUTE,%MAP_OF_ATTRDEF,%MAP_OF_DISTRIBUTION,%MAP_OF_PARTITION,%MAP_OF_PARTITION_RULE,%MAP_OF_PARTITION_OID,%MAP_OF_TABLECHECK,
     %MAP_OF_TABLE,%MAP_OF_VIEW_DEPTH,%MAP_OF_EXTTABLE_FMT,%MAP_OF_INDEX);
 my (@TABLE_PARTITIONS_ORDER_ARRAY,%MAP_OF_RELOPTION);
@@ -97,15 +97,25 @@ SELECT rq.oid,gp_toolkit.mcencode(rq.rsqname),
 FROM pg_resqueue rq,pg_resourcetype rt,pg_resqueuecapability rc
 WHERE rq.oid = rc.resqueueid AND rc.restypid = rt.restypid
 ORDER BY 1,4;#;
+my $SQL_GET_RESOURCE_GROUP = q#SELECT r.oid,gp_toolkit.mcencode(rsgname),
+    (array['CONCURRENCY','CPU_RATE_LIMIT','MEMORY_LIMIT','MEMORY_SHARED_QUOTA','MEMORY_SPILL_RATIO','MEMORY_AUDITOR','CPUSET'])[reslimittype],value
+FROM pg_resgroup r,pg_resgroupcapability c
+WHERE c.resgroupid = r.oid ORDER BY r.oid,c.reslimittype;#;
 my $SQL_GET_ROLE = qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
-   rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),
-   rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
-   rolcreaterexthdfs,rolcreatewexthdfs
+    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),0 setdatabase,
+    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
+    rolcreaterexthdfs,rolcreatewexthdfs,null rolresgroup
+FROM pg_authid;#;
+my $SQL_GET_ROLE_V5 = qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),0 setdatabase,
+    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
+    rolcreaterexthdfs,rolcreatewexthdfs,rolresgroup
 FROM pg_authid;#;
 my $SQL_GET_ROLE_V6 = qq#SELECT a.oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
-   rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(setconfig),
-   rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd
-FROM pg_authid a LEFT JOIN pg_db_role_setting s ON a.oid = s.setrole;#;
+    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(setconfig),gp_toolkit.mcencode(d.datname) setdatabase,
+    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
+    false rolcreaterexthdfs,false rolcreatewexthdfs,rolresgroup
+FROM pg_authid a LEFT JOIN pg_db_role_setting s ON a.oid = s.setrole LEFT JOIN pg_database d ON s.setdatabase = d.oid;#;
 my $SQL_GET_EXTPROTOCOL = qq{SELECT ptcname,unnest(string_to_array(gp_toolkit.mcencode(ptcacl),',')) from pg_extprotocol;};
 my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
@@ -550,17 +560,52 @@ sub outputResourceQueue{
         if("MEMORY_LIMIT" eq uc($resname)){
             $ressetting = "'".$ressetting."'";
         }
+        my @with_array;
         if(exists $name_map{$rsqname}){
-            $name_map{$rsqname} = $name_map{$rsqname}.qq{,$resname=$ressetting};
+            @with_array = @{$name_map{$rsqname}};
         }else{
-            $name_map{$rsqname} = qq{CREATE RESOURCE QUEUE $rsqname WITH ($resname=$ressetting};
             $MAP_OF_RESOURCE_QUEUE{$oid} = $rsqname;
         }
+        push @with_array,qq{$resname=$ressetting};
+        $name_map{$rsqname} = [@with_array];
     }
     my $index = 0;
     for my $rsqname(keys %name_map){
-        $name_map{$rsqname} = $name_map{$rsqname}.");";
-        outputTask($name_map{$rsqname},\$index,$TAIL_ResourceQueue);
+        my $create_sql = qq{CREATE RESOURCE QUEUE $rsqname WITH (}.join(',',@{$name_map{$rsqname}}).qq{);};
+        $create_sql = $create_sql."\n"."ALTER RESOURCE QUEUE $rsqname WITH (".join(',',@{$name_map{$rsqname}}).");";
+        outputTask($create_sql,\$index,$TAIL_ResourceQueue);
+    }
+    outputRegionEnd(\$index,$TAIL_ResourceQueue);
+}
+sub outputResourceGroup{
+    if($DATABASE_VERSION < 5){
+        return;
+    }
+    my @result = queryResult($SQL_GET_RESOURCE_GROUP);
+    my %name_map = ();
+    for my $row(@result){
+        my ($oid,$rsgname,$resname,$ressetting) = @$row;
+        $rsgname = quote(decode($rsgname));
+        if("MEMORY_AUDITOR" eq $resname){
+            $ressetting = $ressetting eq "1" ? "cgroup" : "vmtracker";
+        }
+        my @with_array;
+        if(exists $name_map{$rsgname}){
+            @with_array = @{$name_map{$rsgname}};
+        }else{
+            $MAP_OF_RESOURCE_GROUP{$oid} = $rsgname
+        }
+        push @with_array,qq{$resname=$ressetting};
+        $name_map{$rsgname} = [@with_array];
+    }
+    my $index = 0;
+    for my $rsgname(keys %name_map){
+        my $create_sql = qq{CREATE RESOURCE GROUP $rsgname WITH (}.join(',',@{$name_map{$rsgname}},).qq{);};
+        for my $with(@{$name_map{$rsgname}}){
+            $with =~ s/=/ /;
+            $create_sql = $create_sql."\n"."ALTER RESOURCE GROUP $rsgname SET $with;";
+        }
+        outputTask($create_sql,\$index,$TAIL_ResourceQueue);
     }
     outputRegionEnd(\$index,$TAIL_ResourceQueue);
 }
@@ -630,16 +675,18 @@ sub outputTablespace{
 }
 sub outputRoleSetting{
     my @result;
-    if($DATABASE_VERSION < 6){
+    if($DATABASE_VERSION < 5){
         @result = queryResult($SQL_GET_ROLE);
+    }elsif($DATABASE_VERSION < 6){
+        @result = queryResult($SQL_GET_ROLE_V5);
     }else{
         @result = queryResult($SQL_GET_ROLE_V6);
     }
     my $index = 0;
     for my $row(@result){
         my ($oid,$rolname,$super,$inherit,$createrole,$createdb,$catupdate,$canlogin,$connlimit,$password,$validuntil,
-            $config,$resqueue,$rextgpfd,$rexthttp,$wextgpfd,$rexthdfs,$wexthdfs) = @$row;
-        my $rolname = quote(decode($rolname));
+            $config,$setdatabase,$resqueue,$rextgpfd,$rexthttp,$wextgpfd,$rexthdfs,$wexthdfs,$resgroup) = @$row;
+        ($rolname,$setdatabase) = (quote(decode($rolname)),quote(decode($setdatabase)));
         $resqueue = $MAP_OF_RESOURCE_QUEUE{$resqueue};
         my $alter = qq{ALTER ROLE $rolname WITH};
         $alter = $alter.($super eq "t" ? " SUPERUSER" : " NOSUPERUSER");
@@ -650,7 +697,6 @@ sub outputRoleSetting{
         $alter = $alter.qq{ CONNECTION LIMIT $connlimit};
         $alter = $alter.qq{ PASSWORD '$password'};
         $alter = $alter.("" ne $validuntil ? " VALID UNTIL '$validuntil" : "");
-        $alter = $alter.qq{ RESOURCE QUEUE $resqueue};
         $alter = $alter.($rextgpfd eq "t" ? " CREATEEXTTABLE (protocol='gpfdist',type='readable')" : "");
         $alter = $alter.($rexthttp eq "t" ? " CREATEEXTTABLE (protocol='http',type='readable')" : "");
         $alter = $alter.($wextgpfd eq "t" ? " CREATEEXTTABLE (protocol='gpfdist',type='writable')" : "");
@@ -668,8 +714,16 @@ sub outputRoleSetting{
                 if($key ne "search_path" && $key ne "DateStyle"){
                     $value = "'".$value."'";
                 }
-                output(qq{ALTER ROLE $rolname SET $key TO $value;});
+                if($DATABASE_VERSION > 5 && $setdatabase ne "") {
+                    output(qq{ALTER ROLE $rolname IN DATABASE $setdatabase SET $key TO $value;});
+                }else{
+                    output(qq{ALTER ROLE $rolname SET $key TO $value;});
+                }
             }
+        }
+        output(qq{ALTER ROLE $rolname RESOURCE QUEUE $resqueue;}); 
+        if(exists $MAP_OF_RESOURCE_GROUP{$resgroup}){
+            output(qq{ALTER ROLE $rolname RESOURCE GROUP }.$MAP_OF_RESOURCE_GROUP{$resgroup}.qq{;}); 
         }
     }
     @result = queryResult($SQL_GET_AUTH_MEMBER);
@@ -1627,6 +1681,7 @@ sub main{
     checkLanguage();
     checkEncodeFunction();
     outputResourceQueue();
+    outputResourceGroup();
     outputRole();
     outputTablespace();
     outputRoleSetting();
