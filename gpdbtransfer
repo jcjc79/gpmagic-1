@@ -259,8 +259,10 @@ if [ "M" == "$TYPE" ];then
     if [ "$COMP" == "0" ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
+BEGIN;
 $LOCK;
 $COPYQ
+END;
 END_OF_PSQL
         ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
     else
@@ -270,8 +272,10 @@ ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\
 . $GPHOME/greenplum_path.sh
 set -o pipefail
 PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |$COMP -c -f -1
+BEGIN;
 $LOCK;
 $COPYQ
+END;
 END_OF_INNER_SHELL
 ERR=\\$?;if [ \\$ERR -ne 0 ];then exit \\$ERR;fi
 END_OF_OUTER_SHELL
@@ -292,8 +296,10 @@ else
             if [ "$COMP" == "0" ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
 PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
+BEGIN;
 $LOCK;
 $COPYQ
+END;
 END_OF_PSQL
                 ERR=$?;if [ $ERR -ne 0 ];then exit $ERR;fi
             else
@@ -303,8 +309,10 @@ ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\
 . $GPHOME/greenplum_path.sh
 set -o pipefail
 PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |$COMP -c -f -1
+BEGIN;
 $LOCK;
 $COPYQ
+END;
 END_OF_INNER_SHELL
 ERR=\\$?;if [ \\$ERR -ne 0 ];then exit \\$ERR;fi
 END_OF_OUTER_SHELL
@@ -620,7 +628,8 @@ OPTIONS
   You should make sure all the source and destination hosts have installed the compression rpm.
 
   eg.
-  -t myschema.src_table
+  --compress gzip
+  --compress zstd
 
 --where <condition>
 
@@ -1658,7 +1667,7 @@ sub executeTransfer{
             }
             my $lock_sql = "--";
             if("" ne $dep_tables){
-                $lock_sql = 'BEGIN;LOCK TABLE '.$dep_tables.' IN ACCESS SHARE MODE NOWAIT;END;';
+                $lock_sql = 'LOCK TABLE '.$dep_tables.' IN ACCESS SHARE MODE NOWAIT;';
             }
             my $base64_lock = encode($lock_sql);
             my $base64_where = encode($where);
@@ -1681,21 +1690,17 @@ sub executeTransfer{
                 @stat_msg = ("FAILED","DDL occur error, $from_to_info [$code],[$value]");
                 goto GOTO_NEXT_TASK;
             }
-            ($code,$value) = (0,"");
-            if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
-                ($code,$value) = queryResult("DES",qq{BEGIN;LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $des_tableqq;END;},"CV");
-            }elsif($NEED_DELETE){
-                ($code,$value) = queryResult("DES",qq{BEGIN;LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;DELETE FROM $des_tableqq}.$where.";END;","CV");
-            }
-            if($code > 0){
-                @stat_msg = ("FAILED","Execute data clean occur error, $from_to_info [$code],[$value]");
-                goto GOTO_NEXT_TASK;
-            }
             my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "SLOW" : "FAST")." WITH $where");
             $MSG_QUEUE->enqueue(\@info_msg);
-            my $des_sql = qq{BEGIN;LOCK TABLE $des_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\nINSERT INTO $des_tableqq SELECT * FROM $des_ext_table;\nEND;};
+            my $trans_sql = "BEGIN;\n";
+            if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $des_tableqq;\n};
+            }elsif($NEED_DELETE){
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;DELETE FROM $des_tableqq}.$where.";\n";
+            }
+            $trans_sql = $trans_sql.qq{INSERT INTO $des_tableqq SELECT * FROM $des_ext_table;\nEND;};
             my $start = time();
-            ($code,$value) = queryResult("DES",$des_sql,"CV");
+            ($code,$value) = queryResult("DES",$trans_sql,"CV");
             my $duration = time() - $start;
             if($code > 0){
                 my $app_name = qq{GPDBTRANSFER.$KEY.$thread_index};
