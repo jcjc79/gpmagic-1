@@ -1630,7 +1630,7 @@ sub executeTransfer{
         queryResult("DES","DROP EXTERNAL TABLE IF EXISTS $des_ext_table;","CV");
         if($task_index >= @task_array){
             my $task_list = $TASK_QUEUE->dequeue();
-            if("" eq $task_list){
+            if(undef eq $task_list){
                 last;
             }
             @task_array = @$task_list;
