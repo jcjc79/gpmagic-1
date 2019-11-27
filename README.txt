@@ -11,7 +11,7 @@ miaochen@mail.ustc.edu.cn
 ！！！【在5.20.0和5.20.1版本上暂时无法使用gpmcbackup命令，因为存在Utility模式COPY问题，BUG】！！！ 
 【目前已经修改代码，不带条件可以使用】
 【最新的版本不能直接替换以前的版本，因为日志文件格式发生了变化】
-Master的备份目录下的last_stat.tag文件需要为每一行追加;.zip
+Master的备份目录下的last_stat.tag文件需要为每一行追加;.gz
 
 使用备份恢复命令，请将  
 gpddlbackup  
