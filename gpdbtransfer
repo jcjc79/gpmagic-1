@@ -11,7 +11,7 @@ use POSIX;
 
 my ($SRC_HOST,$SRC_PORT,$SRC_USER,$SRC_PASSWD,$SRC_DATABASE,$DES_HOST,$DES_PORT,$DES_USER,$DES_PASSWD,$DES_DATABASE,
     $KEY,$SRC_MAPFILE,$BY_LEAF,$FORCE,$FORCE_OWNER,$MASTER_ONLY,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,$UNIGNORE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,
-    $INCREMENT,$IGNORE_CHECK,$IGNORE_HBA,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
+    $INCREMENT,$IGNORE_CHECK,$IGNORE_HBA,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$TRANSACTION,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
 my (%SRC_HOSTMAP,%HASH_REPLICATION_TABLE,$TASK_QUEUE,$MSG_QUEUE,$LOG_FILE_HANDLE);
 my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$SQL_BATCH) = (20,6,1,300);
 my ($KEY_DEFAULT) = (20140825);
@@ -98,7 +98,8 @@ left join all_child y on x.oid = y.parrelid
 left join last_oper p on x.oid = p.objid
 left join last_oper c on y.parchildrelid = c.objid
 left join aosegname a1 on x.oid = a1.oid
-left join aosegname a2 on y.parchildrelid = a2.oid;};
+left join aosegname a2 on y.parchildrelid = a2.oid
+order by decode(y.relname,null,1,0),x.nspname,x.relname;};
 
 my $SQL_GET_ALL_USER_VIEW = q{with dep_all as(
     select v.oid void,t.oid toid,t.relkind tkind,nt.nspname,t.relname
@@ -367,6 +368,7 @@ $CMD_NAME --src-host hostname
     [--analyze]
     [--encoding encoding]
     [-B batch_size]
+    [--transaction]
     [--compress method]
     [--where condition]
     [--log-path directory]
@@ -620,6 +622,11 @@ OPTIONS
   The max is $BATCH_MAX.
   The min is $BATCH_MIN.
 
+--transaction
+
+  Specify this option to enable TRUNCATE and LOAD operation in one transaction.
+  For version less then 6, different leaf partition may need other lock, so, for those version, use transaction, partition table will can not use concurrency.
+
 --compress <method>
 
   Specify this option to enable compress stream transfer between src cluster and destination cluster.
@@ -823,16 +830,17 @@ sub queryResult{
 }
 sub getOption{
     GetOptions(
-        'src-host:s'   => \$SRC_HOST,     'src-port:i'          => \$SRC_PORT,       'src-user:s'  => \$SRC_USER,   'src-passwd:s'  => \$SRC_PASSWD,  'src-database:s'  => \$SRC_DATABASE,
-        'des-host:s'   => \$DES_HOST,     'des-port:i'          => \$DES_PORT,       'des-user:s'  => \$DES_USER,   'des-passwd:s'  => \$DES_PASSWD,  'des-database:s'  => \$DES_DATABASE,
-        'key:i'        => \$KEY,          'src-mapfile:s'       => \$SRC_MAPFILE,    'by-leaf!'    => \$BY_LEAF,    'force!'        => \$FORCE,       'owner'           => \$FORCE_OWNER,
-        'from-master!' => \$MASTER_ONLY,
-        't:s'          => \@TABLE_ARRAY,  'T:s'                 => \@EX_TABLE_ARRAY,
-        'f:s'          => \$TABLE_FILE,   'F:s'                 => \$EX_TABLE_FILE,  'unignore:s'  => \$UNIGNORE_FILE,
-        's:s'          => \@SCHEMA_ARRAY, 'S:s'                 => \@EX_SCHEMA_ARRAY,
-        'increment!'   => \$INCREMENT,    'ignore-check!'       => \$IGNORE_CHECK,   'ignore_hba'  => \$IGNORE_HBA, 'delete!'       => \$NEED_DELETE,  'truncate!'      => \$NEED_TRUNCATE,
-        'analyze!'     => \$NEED_ANALYZE, 'encoding:s'          => \$ENCODING,       'B:i'         => \$BATCH_SIZE, 'compress:s'    => \$COMPRESS,     'where:s'        => \$GLOBAL_CONDITION,
-        'log-path:s'   => \$LOG_PATH,     'parameter-file|pf:s' => \$PARAMETER_FILE, 'h|help!'     => \$IS_HELP,    'version!'      => \$VERSION,
+        'src-host:s'          => \$SRC_HOST,         'src-port:i'    => \$SRC_PORT,       'src-user:s' => \$SRC_USER,   'src-passwd:s' => \$SRC_PASSWD, 'src-database:s' => \$SRC_DATABASE,
+        'des-host:s'          => \$DES_HOST,         'des-port:i'    => \$DES_PORT,       'des-user:s' => \$DES_USER,   'des-passwd:s' => \$DES_PASSWD, 'des-database:s' => \$DES_DATABASE,
+        'key:i'               => \$KEY,              'src-mapfile:s' => \$SRC_MAPFILE,    'by-leaf!'   => \$BY_LEAF,    'force!'       => \$FORCE,      'owner'          => \$FORCE_OWNER,
+        'from-master!'        => \$MASTER_ONLY,
+        't:s'                 => \@TABLE_ARRAY,      'T:s'           => \@EX_TABLE_ARRAY,
+        'f:s'                 => \$TABLE_FILE,       'F:s'           => \$EX_TABLE_FILE,  'unignore:s' => \$UNIGNORE_FILE,
+        's:s'                 => \@SCHEMA_ARRAY,     'S:s'           => \@EX_SCHEMA_ARRAY,
+        'increment!'          => \$INCREMENT,        'ignore-check!' => \$IGNORE_CHECK,   'ignore_hba' => \$IGNORE_HBA, 'delete!'      => \$NEED_DELETE, 'truncate!'     => \$NEED_TRUNCATE,
+        'analyze!'            => \$NEED_ANALYZE,     'encoding:s'    => \$ENCODING,       'B:i'        => \$BATCH_SIZE, 'transaction'  => \$TRANSACTION, 'compress:s'    => \$COMPRESS,
+        'where:s'             => \$GLOBAL_CONDITION, 'log-path:s'    => \$LOG_PATH,
+        'parameter-file|pf:s' => \$PARAMETER_FILE,   'h|help!'       => \$IS_HELP,         'version!'  => \$VERSION,
     );
     if(@ARGV != 0){
         errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
@@ -881,6 +889,7 @@ sub getOption{
             if("analyze"       eq $para && "" eq $NEED_ANALYZE     ){$NEED_ANALYZE         =1   ;}
             if("encoding"      eq $para && "" eq $ENCODING         ){$ENCODING             =$val;}
             if("B"             eq $para && "" eq $BATCH_SIZE       ){$BATCH_SIZE           =$val;}
+            if("transaction"   eq $para && "" eq $TRANSACTION      ){$TRANSACTION          =1   ;}
             if("compress"      eq $para && "" eq $COMPRESS         ){$COMPRESS             =$val;}
             if("where"         eq $para && "" eq $GLOBAL_CONDITION ){$GLOBAL_CONDITION     =$val;}
             if("log-path"      eq $para && "" eq $LOG_PATH         ){$LOG_PATH             =$val;}
@@ -969,7 +978,7 @@ sub checkOption{
     logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE --unignore $UNIGNORE_FILE");
     logMessage("INFO","Option values: -s ".join(' -s ',@SCHEMA_ARRAY)." -S ".join(' -S ',@EX_SCHEMA_ARRAY));
     logMessage("INFO","Option values: --increment $INCREMENT --ignore-check $IGNORE_CHECK --ignore-hba $IGNORE_HBA --delete $NEED_DELETE --truncate $NEED_TRUNCATE --analyze $NEED_ANALYZE --encoding $ENCODING -B $BATCH_SIZE");
-    logMessage("INFO","Option values: --compress $COMPRESS --where $GLOBAL_CONDITION --log-path $LOG_PATH --parameter-file $PARAMETER_FILE");
+    logMessage("INFO","Option values: --transaction $TRANSACTION --compress $COMPRESS --where $GLOBAL_CONDITION --log-path $LOG_PATH --parameter-file $PARAMETER_FILE");
     for my $ref((\$SRC_USER,\$SRC_PASSWD,\$DES_USER,\$DES_PASSWD)){
         if(uc($$ref) =~ /^BASE64/){
             $$ref = trim(decode(substr($$ref,6)));
@@ -1308,7 +1317,7 @@ sub processTableArray{
         if(exists $HASH_REPLICATION_TABLE{$src_scma.".".$src_rel}){
             $policytype = "r";
         }
-        push @TABLE_ARRAY,[($src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,"r",qq{"$src_scma"."$src_rel"},$des_scma,$des_rel)];
+        push @TABLE_ARRAY,[($p_scma,$p_rel,$src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,"r",qq{"$src_scma"."$src_rel"},$des_scma,$des_rel)];
     }
     if($check_specify && !$INCREMENT){
         my @all_user_view_list = getAllUserView();
@@ -1334,7 +1343,7 @@ sub processTableArray{
                 next;
             }
             my ($des_scma,$des_rel,$where) = @{$specify_table_hash{$src_table}};
-            push @TABLE_ARRAY,[("",$src_scma,$src_rel,"p","","",$where,"v",$dep_tables,$des_scma,$des_rel)];
+            push @TABLE_ARRAY,[($src_scma,$src_rel,"",$src_scma,$src_rel,"p","","",$where,"v",$dep_tables,$des_scma,$des_rel)];
         }
     }
 }
@@ -1366,7 +1375,7 @@ sub getAOLastStatFromCatalog{
     my @query_array = ();
     my ($ao_index, $all_index) = (0, 0);
     for my $row(@TABLE_ARRAY){
-        my ($ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
+        my ($p_scma,$p_rel,$ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
         $all_index += 1;
         if($typ eq "a"){
             if("" eq $ao){
@@ -1397,7 +1406,7 @@ sub getHeapLastStatFromCatalog{
     my @query_array = ();
     my ($heap_index, $all_index) = (0, 0);
     for my $row(@TABLE_ARRAY){
-        my ($ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
+        my ($p_scma,$p_rel,$ao,$scma,$rel,$ptyp,$typ,$tim) = @$row;
         $all_index += 1;
         if($typ eq "h"){
             my $query_sql = qq{select '$scma','$rel',md5(string_agg(id||','||t, chr(10) order by id,t)) from(\n};
@@ -1437,11 +1446,11 @@ sub processLastTransferStat{
     my @temp_table_array = ();
     my $ignore_count = 0;
     for my $row(@TABLE_ARRAY){
-        my ($src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,$relkind,$dep_tables,$des_scma,$des_rel) = @$row;
+        my ($p_scma,$p_rel,$src_ao,$src_scma,$src_rel,$policytype,$src_typ,$src_tim,$where,$relkind,$dep_tables,$des_scma,$des_rel) = @$row;
         my $src_table = $src_scma.".".$src_rel;
         my $des_table = $des_scma.".".$des_rel;
         if(!$INCREMENT){
-            push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables)];
+            push @temp_table_array,[($p_scma,$p_rel,$src_table,$policytype,$des_table,$where,$relkind,$dep_tables)];
             next;
         }
         if("h" eq $src_typ){
@@ -1451,7 +1460,7 @@ sub processLastTransferStat{
                 ($f_md5,$f_count) = @{$last_stat_from_file{$src_table}};
             }
             if("" eq $f_md5 || $f_md5 ne $md5 || exists $unignore_table_hash{$src_table}){
-                push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$md5,0)];
+                push @temp_table_array,[($p_scma,$p_rel,$src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$md5,0)];
             }else{
                 $ignore_count ++;
             }
@@ -1462,7 +1471,7 @@ sub processLastTransferStat{
                 ($f_tim,$f_count) = @{$last_stat_from_file{$src_table}};
             }
             if("" eq $f_tim || $f_tim ne $src_tim || $count ne $f_count || exists $unignore_table_hash{$src_table}){
-                push @temp_table_array,[($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count)];
+                push @temp_table_array,[($p_scma,$p_rel,$src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count)];
             }else{
                 $ignore_count ++;
             }
@@ -1614,12 +1623,21 @@ sub getSrcTableColumn{
 sub executeTransfer{
     my ($thread_index) = @_;
     my $des_ext_table = 'gpdbtransfer.transform_'.$KEY."_".$thread_index;
-    my $task = $TASK_QUEUE->dequeue();
-    my ($code,$value);
+    my (@task_array,$code,$value);
+    my $task_index = 0;
     my $base64_pass = encode("" eq $SRC_PASSWD ? "--" : $SRC_PASSWD);
-    while(defined $task){
+    while(1){
+        queryResult("DES","DROP EXTERNAL TABLE IF EXISTS $des_ext_table;","CV");
+        if($task_index >= @task_array){
+            my $task_list = $TASK_QUEUE->dequeue();
+            if("" eq $task_list){
+                last;
+            }
+            @task_array = @$task_list;
+            $task_index = 0;
+        }
         my @stat_msg :shared;
-        my ($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count) = @$task;
+        my ($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count) = @{$task_array[$task_index]};
         my $from_to_info = qq{FROM $src_table TO $des_table};
         if($src_table eq $des_table){
             $from_to_info = qq{FOR TABLE NAME $des_table};
@@ -1690,21 +1708,17 @@ sub executeTransfer{
                 @stat_msg = ("FAILED","DDL occur error, $from_to_info [$code],[$value]");
                 goto GOTO_NEXT_TASK;
             }
-            ($code,$value) = (0,"");
-            if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
-                ($code,$value) = queryResult("DES",qq{BEGIN;LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $des_tableqq;END;},"CV");
-            }elsif($NEED_DELETE){
-                ($code,$value) = queryResult("DES",qq{BEGIN;LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;DELETE FROM $des_tableqq}.$where.";END;","CV");
-            }
-            if($code > 0){
-                @stat_msg = ("FAILED","Execute data clean occur error, $from_to_info [$code],[$value]");
-                goto GOTO_NEXT_TASK;
-            }
             my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "SLOW" : "FAST")." WITH $where");
             $MSG_QUEUE->enqueue(\@info_msg);
-            my $des_sql = qq{BEGIN;LOCK TABLE $des_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\nINSERT INTO $des_tableqq SELECT * FROM $des_ext_table;\nEND;};
+            my $trans_sql = $TRANSACTION ? "BEGIN;\n" : "";
+            if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $des_tableqq;\n};
+            }elsif($NEED_DELETE){
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;DELETE FROM $des_tableqq}.$where.";\n";
+            }
+            $trans_sql = $trans_sql.qq{INSERT INTO $des_tableqq SELECT * FROM $des_ext_table;}.($TRANSACTION ? "\nEND;" : "");
             my $start = time();
-            ($code,$value) = queryResult("DES",$des_sql,"CV");
+            ($code,$value) = queryResult("DES",$trans_sql,"CV");
             my $duration = time() - $start;
             if($code > 0){
                 my $app_name = qq{GPDBTRANSFER.$KEY.$thread_index};
@@ -1723,9 +1737,8 @@ sub executeTransfer{
         }
 GOTO_NEXT_TASK:
         $MSG_QUEUE->enqueue(\@stat_msg);
-        $task = $TASK_QUEUE->dequeue();
+        $task_index += 1;
     }
-    ($code,$value) = queryResult("DES","DROP EXTERNAL TABLE IF EXISTS $des_ext_table;","CV");
     $MSG_QUEUE->enqueue(undef);
 }
 sub executeMessage{
@@ -1774,9 +1787,21 @@ sub startTransfer{
     }
     $TASK_QUEUE = Thread::Queue->new();
     $MSG_QUEUE = Thread::Queue->new();
-    for my $table_scalar(shuffle @TABLE_ARRAY){
-        my @shared_array :shared = @$table_scalar;
-        $TASK_QUEUE->enqueue(\@shared_array);
+    my @init_array :shared = ();
+    my $array_refer = \@init_array;
+    my ($pre_p_scma,$pre_p_rel) = ("","");
+    for my $index(0 .. $tables_size){
+        my ($p_scma,$p_rel,$src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count) = $index < $tables_size ? @{$TABLE_ARRAY[$index]} : ();
+        my @task :shared = ($src_table,$policytype,$des_table,$where,$relkind,$dep_tables,$src_tim,$count);
+        if(($p_scma eq $pre_p_scma && $p_rel eq $pre_p_rel && $TRANSACTION && $SRC_DATABASE_VERSION < 6) || $index == 0){
+            push @$array_refer,\@task;
+        }elsif($index > 0){
+            $TASK_QUEUE->enqueue($array_refer);
+            my @new_array :shared = ();
+            $array_refer = \@new_array;
+            push @$array_refer,\@task;
+        }
+        ($pre_p_scma,$pre_p_rel) = ($p_scma,$p_rel);
     }
     for my $index(0 .. $BATCH_SIZE - 1){
         $TASK_QUEUE->enqueue(undef);
