@@ -62,7 +62,7 @@ my $GET_ALL_USER_TABLE_SQL = q{select '',replace(encode(textsend(n.nspname),'bas
     and c.relkind='r' and relstorage<>'x' and c.oid not in(select parchildrelid from pg_partition_rule);};
 
 my $GET_PARENT_CHILD_LIST_SQL = q{with all_parent as (
-    select c.oid,nspname,relname,decode(relstorage,'h','h','a') relstorage
+    select c.oid,nspname,relname,decode(relstorage,'h','h','a') relstorage,relpages
     from pg_class c, pg_namespace n
         where c.relnamespace = n.oid
         and c.relkind = 'r' and c.relstorage <> 'x'
@@ -99,7 +99,7 @@ left join last_oper p on x.oid = p.objid
 left join last_oper c on y.parchildrelid = c.objid
 left join aosegname a1 on x.oid = a1.oid
 left join aosegname a2 on y.parchildrelid = a2.oid
-order by decode(y.relname,null,1,0),x.nspname,x.relname;};
+order by decode(y.relname,null,0,1) desc,decode(y.relname,null,0,x.oid),x.relpages * decode(x.relstorage,'h',1.0,2.5) desc;};
 
 my $SQL_GET_ALL_USER_VIEW = q{with dep_all as(
     select v.oid void,t.oid toid,t.relkind tkind,nt.nspname,t.relname
