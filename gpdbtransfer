@@ -1712,9 +1712,11 @@ sub executeTransfer{
             $MSG_QUEUE->enqueue(\@info_msg);
             my $trans_sql = $TRANSACTION ? "BEGIN;\n" : "";
             if($NEED_TRUNCATE || ($NEED_DELETE && "" eq $where)){
-                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;TRUNCATE TABLE $des_tableqq;\n};
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN ACCESS EXCLUSIVE MODE NOWAIT;\nTRUNCATE TABLE $des_tableqq;\n};
             }elsif($NEED_DELETE){
-                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;DELETE FROM $des_tableqq}.$where.";\n";
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN EXCLUSIVE MODE NOWAIT;\nDELETE FROM $des_tableqq}.$where.";\n";
+            }else{
+                $trans_sql = $trans_sql.qq{LOCK TABLE $des_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\n};
             }
             $trans_sql = $trans_sql.qq{INSERT INTO $des_tableqq SELECT * FROM $des_ext_table;}.($TRANSACTION ? "\nEND;" : "");
             my $start = time();
