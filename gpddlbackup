@@ -1192,38 +1192,27 @@ sub getNextLevelPartition{
     my @partition_array;
     for my $row(@rule_array){
         my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
-        my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[8];
+        my $class_option = @{$MAP_OF_TABLE{$parchildrelid}}[8];
+        if($class_option eq ""){
+            $class_option = "APPENDONLY=FALSE";
+        }
         my $nextKey = $oid;
-        my $reloptions = "";
-        if($rule_def =~ /\s*WITH\s*\((.*)\)\s*/){
-            $reloptions = uc($1);
-            $reloptions =~ s/\s//g;
-            if($parreloptions ne "" && $parreloptions ne $reloptions){
-                $reloptions = $parreloptions;
-            }
-            if($paroptions eq $reloptions){
-                $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ /;
-            }else{
-                $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
-            }
-            $rule_def =~ s/\s+$//;
+        if($rule_def =~ /\s*WITH\s*\(.*\)\s*/){
+            $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($class_option) /;
         }else{
-            if($parreloptions eq ""){
-                $parreloptions = "APPENDONLY=FALSE";
-            }
-            if($paroptions ne $reloptions){
-                if($rule_def =~ /\s*TABLESPACE\s*/){
-                    $rule_def =~ s/\s*TABLESPACE\s*/ WITH($parreloptions) TABLESPACE /;
-                }else{
-                    $rule_def = $rule_def." WITH($parreloptions)";
-                }
+            if($rule_def =~ /\s*TABLESPACE\s*/){
+                $rule_def =~ s/\s*TABLESPACE\s*/ WITH($class_option) TABLESPACE /;
+            }else{
+                $rule_def = $rule_def." WITH($class_option)";
             }
         }
+        $rule_def =~ s/\s+EVERY\s+\([^\(]+\)//;
+        $rule_def =~ s/\s+$//;
         if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION |^DEFAULT SUBPARTITION /){
             $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$parname." ".$rule_def;
         }
         if(exists $MAP_OF_PARTITION_RULE{$nextKey}){
-            push @partition_array,($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getNextLevelPartition($nextKey,$level + 1,$reloptions)."\n".($INDENT x $level).")";
+            push @partition_array,($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getNextLevelPartition($nextKey,$level + 1,$class_option)."\n".($INDENT x $level).")";
         }else{
             push @partition_array,($INDENT x $level).$rule_def;
         }
@@ -1243,16 +1232,7 @@ sub getPartitionTemplate{
         my @partition_array;
         for my $row(@rule_array){
             my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
-            my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[8];
-            if($rule_def =~ /\s*WITH\s*\((.*)\)\s*/){
-                my $reloptions = uc($1);
-                $reloptions =~ s/\s//g;
-                if($parreloptions ne "" && $parreloptions ne $reloptions){
-                    $reloptions = $parreloptions;
-                }
-                $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
-                $rule_def =~ s/\s+$//;
-            }
+            $rule_def =~ s/\s+$//;
             push @partition_array,$INDENT.$rule_def;
         }
         $alter = $alter."(\n".join(",\n",@partition_array)."\n)\n;\n";
