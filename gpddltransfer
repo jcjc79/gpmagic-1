@@ -1,0 +1,1777 @@
+#!/usr/bin/perl
+use strict;
+use MIME::Base64;
+use threads;
+use Thread::Queue;
+use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use IO::Handle qw();
+use Fcntl qw(:flock);
+use POSIX;
+
+my ($SRC_HOST,$SRC_PORT,$SRC_DATABASE,$SRC_USER,$SRC_PASSWD);
+my ($DES_HOST,$DES_PORT,$DES_DATABASE,$DES_USER,$DES_PASSWD);
+my (@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,%SPECIFY_SCHEMA_HASH,$SPECIFY_SCHEMA,%EX_SCHEMA_HASH);
+my ($DDL_FILE,$LIST_FILE,$PARAMETER_FILE,$IS_HELP,$VERSION);
+my ($SRC_DATABASE_VERSION,$DES_DATABASE_VERSION);
+
+my (%SRC_ID_MAP_OF_ROLE,%DES_ID_MAP_OF_ROLE);
+my (%SRC_ID_MAP_OF_TABLESPACE,%SRC_NAME_MAP_OF_TABLESPACE);
+my (%DES_ID_MAP_OF_TABLESPACE,%DES_NAME_MAP_OF_TABLESPACE);
+my ($SRC_DATABASE_TABLESPACE);
+my ($DES_DATABASE_TABLESPACE);
+my (%SRC_ID_MAP_OF_SCHEMA,%SRC_NAME_MAP_OF_SCHEMA);
+my (%DES_ID_MAP_OF_SCHEMA,%DES_NAME_MAP_OF_SCHEMA);
+my (%DES_ID_MAP_OF_TYPE);
+my (%SRC_MAP_OF_ATTRIBUTE);
+my (%DES_MAP_OF_ATTRIBUTE);
+my (%SRC_MAP_OF_ATTRDEF);
+my (%DES_MAP_OF_ATTRDEF);
+my (%SRC_MAP_OF_DISTRIBUTION);
+my (%DES_MAP_OF_DISTRIBUTION);
+my (%SRC_NAME_MAP_OF_COMPTYPE);
+my (%DES_NAME_MAP_OF_COMPTYPE);
+my (%SRC_MAP_OF_ENUM);
+my (%DES_MAP_OF_ENUM);
+my (%SRC_NAME_MAP_OF_DOMAIN);
+my (%DES_NAME_MAP_OF_DOMAIN);
+my (%SRC_NAME_MAP_OF_SEQUENCE);
+my (%DES_NAME_MAP_OF_SEQUENCE);
+my (%SRC_MAP_OF_PARTITION,%SRC_MAP_OF_PARTITION_RULE,%SRC_MAP_OF_PARTITION_COID);
+my (%DES_MAP_OF_PARTITION,%DES_MAP_OF_PARTITION_RULE,%DES_MAP_OF_PARTITION_COID);
+my (%SRC_ID_MAP_OF_TABLE,%SRC_NAME_MAP_OF_TABLE);
+my (%DES_ID_MAP_OF_TABLE,%DES_NAME_MAP_OF_TABLE);
+
+my ($DDL_FILE_HANDLE,$LIST_FILE_HANDLE);
+my ($MINI_BATCH) = (32 << 10);
+my ($SQL_BATCH) = (300);
+my ($INDENT) = ("  ");
+
+my ($TAIL_ResourceQueue,$TAIL_ROLE,$TAIL_TableSpace,$TAIL_RoleSetting,$TAIL_Language,$TAIL_Schema,$TAIL_Type,$TAIL_Function,
+    $TAIL_Sequence,$TAIL_Table,$TAIL_ExtTable,$TAIL_View,$TAIL_Index,$TAIL_Comment) =
+    ("ResourceQueue","Role","TableSpace","RoleSetting","Language","Schema","Type","Function","Sequence","Table","ExtTable","View","Index","Comment");
+my %RELATION_ACL_MAP = ("r" => "SELECT","w" => "UPDATE","a" => "INSERT","d" => "DELETE","x" => "REFERENCES","t" => "TRIGGER","D" => "TRUNCATE");
+my %EXT_FORMAT_TYPE_MAP = ("a" => "AVRO","b" => "CUSTOM","c" => "CSV","p" => "PARQUET","t" => "TEXT");
+my %KEY_WORD_SET;
+(my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
+my $MAIN_PID = substr("000000".$$,-6);
+
+my ($CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = (chr(1).chr(0).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my $REGION_START  = qq#--REGION-START-#.$CMD_SPLIT;
+my $REGION_END    = qq#--REGION-END---#.$CMD_SPLIT;
+my $TASK_SPLIT    = qq#--TASK---SPLIT-#.$CMD_SPLIT;
+
+my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
+my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY x.idx),md5(prosrc)  prosrc FROM (
+    SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
+        WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
+    ) x, pg_type t WHERE t.oid = x.typs[x.idx] GROUP BY x.oid,x.proname,x.prosrc ORDER BY 1;};
+my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","name","text","_text");
+my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad","cac17fe8e01235f96a4805ccc268443d");
+my $ENCODE_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str text) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(strs text[]) returns varchar as $$
+import base64
+if strs == None:
+    return ""
+output = []
+for str in strs:
+    output.append(base64.b64encode(str))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str name) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(acls aclitem[]) returns varchar as $$
+import base64
+if acls == None:
+    return ""
+output = []
+for acl in acls:
+    (key,val,findKey,inBracket) = ("","",False,False)
+    for chr in acl:
+        if not findKey:
+            key = key + chr
+        else:
+            val = val + chr
+        if chr == '"':
+            inBracket = not inBracket
+        elif chr == '=' and not inBracket:
+            key = key[0:-1]
+            findKey = True
+    if inBracket:
+        plpy.error("Can not split: %s" % (acl))
+    output.append(base64.b64encode(key)+":"+base64.b64encode(val))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+#;
+my $SQL_GET_ROLE = qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),
+    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
+    rolcreaterexthdfs,rolcreatewexthdfs
+FROM pg_authid;#;
+my $SQL_GET_ROLE_V6 = qq#SELECT a.oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+    rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(setconfig),
+    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd
+FROM pg_authid a LEFT JOIN pg_db_role_setting s ON a.oid = s.setrole;#;
+my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname)
+FROM pg_tablespace ts
+WHERE spcname not in('pg_global');#;
+my $SQL_GET_DATABASE_TABLESPACE = qq{SELECT dattablespace FROM pg_database WHERE datname = current_database();};
+my $SQL_GET_SCHEMA = qq#SELECT oid,gp_toolkit.mcencode(nspname) FROM pg_namespace;#;
+my $SQL_GET_ATTRIBUTE = q{SELECT attrelid,gp_toolkit.mcencode(attname),
+    gp_toolkit.mcencode(format_type(atttypid,atttypmod)),attnum,attnotnull,atthasdef,attisdropped
+FROM pg_attribute
+WHERE attrelid >= 16384 AND attnum > 0
+AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = attrelid);};
+my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(pg_get_expr(adbin,adrelid)) FROM pg_attrdef
+WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = adrelid);};
+my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,',') FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
+my $SQL_GET_DISTRIBUTION_V6 = q{SELECT localoid,array_to_string(distkey,','),policytype FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
+my $SQL_GET_COMPTYPE = q#SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
+my $SQL_GET_ENUM = q#SELECT gp_toolkit.mcencode(typname),typnamespace,typowner,string_agg(gp_toolkit.mcencode(enumlabel),',' ORDER BY e.oid)
+FROM pg_type t,pg_enum e
+WHERE e.enumtypid = t.oid AND typtype ='e' AND t.oid >= 16384
+GROUP BY 1,2,3;#;
+my $SQL_GET_DOMAIN = q#SELECT gp_toolkit.mcencode(d.typname),d.typnamespace,
+gp_toolkit.mcencode(t.typname),t.typnamespace
+FROM pg_type d,pg_type t
+WHERE d.typbasetype = t.oid AND d.typtype = 'd' AND d.oid >= 16384;#;
+my $SQL_GET_SEQUENCE = qq{SELECT c.oid,c.relnamespace,gp_toolkit.mcencode(relname)
+FROM pg_class c,pg_namespace n
+WHERE c.relnamespace = n.oid AND relkind='S' AND (n.oid > 16384 OR n.oid = 2200);};
+my $SQL_GET_PARTITION = q{SELECT oid,parrelid,parkind,parlevel,paristemplate,array_to_string(paratts,',') FROM pg_partition order by 2,4;};
+my $SQL_GET_PARTITION_RULE = qq{SELECT oid,paroid,parchildrelid,parparentrule,gp_toolkit.mcencode(parname),parisdefault,parruleord,parrangestartincl,parrangeendincl,
+    gp_toolkit.mcencode(pg_get_expr(parrangestart, parchildrelid)),gp_toolkit.mcencode(pg_get_expr(parrangeend, parchildrelid)),
+    gp_toolkit.mcencode(pg_get_partition_rule_def(oid, true))
+FROM pg_partition_rule ORDER BY 2,4,7;};
+my $SQL_GET_TABLE = qq{SELECT c.oid,gp_toolkit.mcencode(relname),relnamespace,relowner,reltablespace,relnatts,relhasoids,
+relhassubclass,gp_toolkit.mcencode(relacl),array_to_string(reloptions,','),parchildrelid IS NOT NULL
+FROM pg_class c LEFT JOIN pg_partition_rule pr
+ON c.oid = pr.parchildrelid
+WHERE (relnamespace >= 16384 OR relnamespace = 2200) AND relkind = 'r' AND relstorage <> 'x';};
+
+my $HELP_MESSAGE = qq(COMMAND NAME: $CMD_NAME
+Transfer table definition between Greenplum database.
+
+Developed by Miao Chen
+
+Work Email:
+michen\@pivotal.io
+Private Email:
+miaochen\@mail.ustc.edu.cn
+
+************************************************************************************************
+SYNOPSIS
+************************************************************************************************
+$CMD_NAME --src-host hostname
+    [--src-port database port]
+    --src-database database name
+    [--src-user database user]
+    [--src-passwd database password]
+    --des-host hostname
+    [--des-port database port]
+    --des-database database name
+    [--des-user database user]
+    [--des-passwd database password]
+    [-s <schema> [-s <schema>] ...]
+    [-S <schema> [-S <schema>] ...]
+    --ddl-file filename
+    --list-file filename
+    [--parameter-file | --pf filename]
+    [-h|--help]
+    [--version]
+*****************************************************
+DESCRIPTION
+*****************************************************
+The $CMD_NAME utility is used to transfer table definition from source database to destination database(Greenplum Database).
+When you start $CMD_NAME, the utility will get source database's table definition and compare with the detination database.
+Will generate ddl modification information to file --ddl-file, and table list to file --list-file.
+*****************************************************
+OPTIONS
+*****************************************************
+--src-host <source cluster master host>
+
+  Source database hostname or IP address.
+  This option is required.
+
+  If specify a hostname, you should make sure the hostname is known for current environment.
+
+  eg.
+  --src-host src_master
+  --src-host 172.28.4.250
+
+--src-port <source cluster master port>
+
+  Source database port number, If not specified, the default is 5432.
+  eg.
+  --src-port 5433
+
+--src-database <database>
+
+  Source database.
+  This option is required.
+  eg.:
+  --src-database src_database
+
+--src-user <source cluster user name>
+
+  User name that is used to connect to the source database. If not specified, the default is gpadmin.
+  eg.
+  --src-user src_user
+
+--src-passwd <source cluster user password>
+
+  User password that is used to connect to the source database.
+  If not specified, you should make source the connection is trusted.
+  eg.
+  --src-passwd password
+
+--des-host <destination cluster master host>
+
+  Destination database hostname or IP address.
+  This option is required.
+  eg.
+  --des-host des_master
+  --des-host 172.28.4.250
+
+--des-port <destination cluster master port>
+
+  Destination database port number, If not specified, the default is 5432.
+  eg.
+  --des-port 5433
+
+--des-database <database>
+
+  Destination database.
+  This option is required.
+  eg.:
+  --des-database des_database
+
+--des-user <destination cluster user name>
+
+  User name that is used to connect to the destination database. If not specified, the default is gpadmin.
+  eg.
+  --des-user src_user
+
+--des-passwd <destination cluster user password>
+
+  User password that is used to connect to the destination database.
+  If not specified, you should make source the connection is trusted.
+  eg.
+  --des-passwd password
+
+-s <schema name>
+
+  Transfer tables in this schema.
+  This option can be specified multiple times to include multiple schemas.
+  eg.:
+  -s public -s myschema
+
+-S <schema name>
+
+  Do not transfer tables in this schema.
+  This option can be specified multiple times to include multiple schemas.
+  eg.:
+  -S public -S myschema
+
+--ddl-file <ddl filename>
+
+  Use to store modification sql.
+  eg.
+  --ddl-file ddl_file.ddl
+
+--list-file <list filename>
+
+  Use to store modified tables list.
+  eg.
+  --list-file list_file.list
+
+--parameter-file | --pf <parameter_file>
+
+  Specify the parameter file.
+  Format:
+  name=value
+  eg.:
+
+    src-host       =  192.168.88.135
+    src-port       =  5432
+    src-database   =  postgres
+    src-user       =  gpadmin
+    src-password   =  gpadmin
+    des-host       =  192.168.88.135
+    des-port       =  5432
+    des-database   =  testddl
+    des-user       =  gpadmin
+    des-password   =  gpadmin
+#   s              = schema
+#   s              = schema
+#   S              = schema
+#   S              = schema
+    ddl-file       =  /tmp/ddl_file.ddl
+    list-file      =  /tmp/list_file.list
+
+-h|--help
+
+  Displays the online help.
+
+--version
+
+  Displays the command version.
+);
+
+sub printMessage{
+    my ($flag,$message) = @_;
+    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
+    $message = "$time_flag-[$flag]-:$message\n";
+    print STDERR $message;
+    return $message;
+}
+sub exitMain{
+    my ($code) = @_;
+    exit $code;
+}
+sub errorMessage{
+    my ($message) = @_;
+    printMessage("ERROR",$message);
+    print "Usage: $CMD_NAME [-h|--help] [options]\n";
+    exitMain(1);
+}
+sub trim{
+    my ($string) = @_;
+    $string =~ s/(^\s+|\s+$)//g;
+    return $string;
+}
+sub outputTask{
+    my ($task,$indexref,$taskTail) = @_;
+    $task = trim($task);
+    if($$indexref == 0){
+        print $DDL_FILE_HANDLE $REGION_START.$taskTail."\n";
+    }else{
+        print $DDL_FILE_HANDLE $TASK_SPLIT.$taskTail."\n";
+    }
+    print $DDL_FILE_HANDLE $task."\n";
+    $$indexref += 1;
+}
+sub outputRegionEnd{
+    my ($indexref,$taskTail) = @_;
+    if($$indexref > 0){
+        print $DDL_FILE_HANDLE $REGION_END.$taskTail."\n";
+    }
+}
+sub outwarn{
+    print STDERR trim($_[0])."\n";
+}
+sub outputList{
+    for my $record(@_){
+        my $task = trim($record);
+        if($task ne ""){
+            print $LIST_FILE_HANDLE trim($record)."\n";
+        }
+    }
+}
+sub encode{
+    my ($string) = @_;
+    my $encode = encode_base64($string);
+    $encode =~ s/\n//g;
+    return $encode;
+}
+sub decode{
+    if(wantarray()){
+        my @rv = ();
+        for my $str(@_){
+            push @rv,decode_base64($str);
+        }
+        return @rv;
+    }else{
+        return decode_base64($_[0]);
+    }
+}
+sub quote{
+    my ($ident) = @_;
+    $ident =~ s/"/""/g;
+    if($ident !~ /^[a-z][a-z0-9_]*$/ || exists $KEY_WORD_SET{uc($ident)}){
+        $ident = '"'.$ident.'"';
+    }
+    return $ident;
+}
+sub illegal{
+    my @list = @_;
+    for my $str(@list){
+        if ($str =~ /\W/){
+            return 1;
+        }
+    }
+    return 0;
+}
+sub isTempSchema{
+    if($_[0] =~ /^pg_temp_/ || $_[0] =~ /^pg_toast_temp_/ || $_[0] eq ""){
+        return 1;
+    }
+    return 0;
+}
+sub getArrayFromCommaSeparatedList{
+    my ($string) = @_;
+    if($string eq ""){
+        return [()];
+    }
+    my @array = split(//,$string);
+    my @list = ();
+    my ($inSingleQuote,$inDoubleQuote,$bracketLevel) = (0,0,0);
+    my $item = "";
+    for my $curr(@array){
+        $item = $item.$curr;
+        if(!$inDoubleQuote && $curr eq "'"){
+            $inSingleQuote = !$inSingleQuote;
+        }elsif(!$inSingleQuote && $curr eq '"'){
+            $inDoubleQuote = !$inDoubleQuote;
+        }elsif(!$inDoubleQuote && !$inSingleQuote && $curr eq '('){
+            $bracketLevel++;
+        }elsif (!$inDoubleQuote && !$inSingleQuote && $curr eq ')'){
+            $bracketLevel--;
+        }elsif (!$inDoubleQuote && !$inSingleQuote && $bracketLevel == 0 && $curr eq ','){
+            push @list,trim(substr($item,0,-1));
+            $item = "";
+        }
+    }
+    if($inDoubleQuote || $inSingleQuote || $bracketLevel != 0){
+        errorMessage("Can not split:\n".$string);
+    }
+    push @list,trim($item);
+    return @list;
+}
+sub readLineFromFile{
+    my ($file_path) = @_;
+    if(!-e $file_path){
+        errorMessage("No file exists named: $file_path");
+    }
+    if(!open(FILE,"<",$file_path)){
+        errorMessage("Can't open file: $file_path");
+    }
+    my @lines_array = ();
+    while(my $line = <FILE>){
+        $line = trim($line);
+        if(!($line =~ /^#/) && "" ne $line){
+            push @lines_array,$line;
+        }
+    }
+    close FILE;
+    return @lines_array;
+}
+sub queryResult{
+    my ($src_or_des,$query_sql,$return_flag) = @_;
+    my $CMDS = "PGAPPNAME=gpddltransfer PGOPTIONS='-c optimizer=off -c client_encoding=UTF8 -c log_statement=NONE' ";
+    if("SRC" eq $src_or_des){
+        $CMDS = $CMDS."PGHOST='$SRC_HOST' PGDATABASE='$SRC_DATABASE' PGPORT=$SRC_PORT ";
+        $CMDS = $CMDS."PGUSER='$SRC_USER' ".("" ne $SRC_PASSWD ? "PGPASSWORD='$SRC_PASSWD' " : "");
+    }elsif("DES" eq $src_or_des){
+        $CMDS = $CMDS."PGHOST='$DES_HOST' PGDATABASE='$DES_DATABASE' PGPORT=$DES_PORT ";
+        $CMDS = $CMDS."PGUSER='$DES_USER' ".("" ne $DES_PASSWD ? "PGPASSWORD='$DES_PASSWD' " : "");
+    }
+    local $/ = $RECORD_SPLIT;
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
+    $CMDS = $CMDS.$query_sql."\n";
+    $CMDS = $CMDS."END_OF_SQL\n";
+    my @result = readpipe($CMDS);
+    my $return_code = $? >> 8;
+    chomp(@result);
+    local $/ = chr(10);
+    chomp($result[-1]) if (@result > 0);
+    return ($return_code,join("\n",@result)) if ("CV" eq $return_flag);
+    errorMessage(join("\n",@result)) if ($return_code);
+    return join("\n",@result) if ("Scalar" eq $return_flag);
+    my @return_list = ();
+    for my $row(@result){
+        push @return_list,[split(/$SQL_DELIM/,$row)];
+    }
+    return @return_list;
+}
+sub batchQuery{
+    my ($src_or_des,$query_list) = @_;
+    my ($batch_sql,$batch_size) = ("",0);
+    my @return_list;
+    for my $query(@$query_list){
+        $batch_sql = $batch_sql.($batch_size == 0 ? "" : "\n").$query;
+        $batch_size += length($query);
+        if($batch_size >= $MINI_BATCH){
+            push @return_list,queryResult($src_or_des,$batch_sql);
+            ($batch_sql,$batch_size) = ("",0);
+        }
+    }
+    if($batch_size > 0){
+        push @return_list,queryResult($src_or_des,$batch_sql);
+    }
+    return @return_list;
+}
+sub getOption{
+    GetOptions(
+        'src-host:s'          => \$SRC_HOST,
+        'src-port:i'          => \$SRC_PORT,
+        'src-database:s'      => \$SRC_DATABASE,
+        'src-user:s'          => \$SRC_USER,
+        'src-password:s'      => \$SRC_PASSWD,
+        'des-host:s'          => \$DES_HOST,
+        'des-port:i'          => \$DES_PORT,
+        'des-database:s'      => \$DES_DATABASE,
+        'des-user:s'          => \$DES_USER,
+        'des-password:s'      => \$DES_PASSWD,
+        's:s'                 => \@SCHEMA_ARRAY,
+        'S:s'                 => \@EX_SCHEMA_ARRAY,
+        'ddl-file:s'          => \$DDL_FILE,
+        'list-file:s'         => \$LIST_FILE,
+        'parameter-file|pf:s' => \$PARAMETER_FILE,
+        'h|help!'             => \$IS_HELP,
+        'version!'            => \$VERSION,
+    );
+    if(@ARGV != 0){
+        errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
+    }
+    if($IS_HELP){
+        print $HELP_MESSAGE;
+        exitMain(0);
+    }
+    if($VERSION){
+        print "$CMD_NAME 0.1\n";
+        exitMain(0);
+    }
+    if("" ne $PARAMETER_FILE){
+        my @parameter_array = readLineFromFile($PARAMETER_FILE);
+        for my $line(@parameter_array){
+            my ($para,$val) = split(/=/,$line,2);
+            ($para,$val) = (trim($para),trim($val));
+            if("src-host"     eq $para && "" eq $SRC_HOST     ){$SRC_HOST            = $val;}
+            if("src-port"     eq $para && "" eq $SRC_PORT     ){$SRC_PORT            = $val;}
+            if("src-database" eq $para && "" eq $SRC_DATABASE ){$SRC_DATABASE        = $val;}
+            if("src-user"     eq $para && "" eq $SRC_USER     ){$SRC_USER            = $val;}
+            if("src-password" eq $para && "" eq $SRC_PASSWD   ){$SRC_PASSWD          = $val;}
+            if("des-host"     eq $para && "" eq $DES_HOST     ){$DES_HOST            = $val;}
+            if("des-port"     eq $para && "" eq $DES_PORT     ){$DES_PORT            = $val;}
+            if("des-database" eq $para && "" eq $DES_DATABASE ){$DES_DATABASE        = $val;}
+            if("des-user"     eq $para && "" eq $DES_USER     ){$DES_USER            = $val;}
+            if("des-password" eq $para && "" eq $DES_PASSWD   ){$DES_PASSWD          = $val;}
+            if("s"            eq $para                        ){push @SCHEMA_ARRAY    ,$val;}
+            if("S"            eq $para                        ){push @EX_SCHEMA_ARRAY ,$val;}
+            if("ddl-file"     eq $para && "" eq $DDL_FILE     ){$DDL_FILE            = $val;}
+            if("list-file"    eq $para && "" eq $LIST_FILE    ){$LIST_FILE           = $val;}
+        }
+    }
+}
+sub checkOption{
+    if("" eq $SRC_HOST){
+        errorMessage("Please specify parameter: --src-host");
+    }
+    if("" eq $SRC_PORT){
+        printMessage("NOTICE","Not specify --src-port, use default: 5432");
+        $SRC_PORT = "5432";
+    }
+    if("" eq $SRC_DATABASE){
+        errorMessage("Please specify parameter: --src-database");
+    }elsif(illegal($SRC_DATABASE)){
+        errorMessage("Source database name is not legal:[".escape($SRC_DATABASE)."]");
+    }
+    if("" eq $SRC_USER){
+        printMessage("NOTICE","Not specify --src-user, use default: gpadmin");
+        $SRC_USER = "gpadmin";
+    }
+    if("" eq $DES_HOST){
+        errorMessage("Please specify parameter: --des-host");
+    }
+    if("" eq $DES_PORT){
+        printMessage("NOTICE","Not specify --des-port, use default: 5432");
+        $DES_PORT = "5432";
+    }
+    if("" eq $DES_DATABASE){
+        errorMessage("Please specify parameter: --des-database");
+    }elsif(illegal($DES_DATABASE)){
+        errorMessage("Source database name is not legal:[".escape($DES_DATABASE)."]");
+    }
+    if("" eq $DES_USER){
+        printMessage("NOTICE","Not specify --des-user, use default: gpadmin");
+        $DES_USER = "gpadmin";
+    }
+    if("" eq $DDL_FILE){
+        errorMessage("Please specify parameter: --ddl-file");
+    }
+    if(!open($DDL_FILE_HANDLE,">",$DDL_FILE)){
+        errorMessage("Can't open file:$DDL_FILE");
+    }
+    $DDL_FILE_HANDLE->autoflush(1);
+    if("" eq $LIST_FILE){
+        errorMessage("Please specify parameter: --list-file");
+    }
+    if(!open($LIST_FILE_HANDLE,">",$LIST_FILE)){
+        errorMessage("Can't open file:$LIST_FILE");
+    }
+    $LIST_FILE_HANDLE->autoflush(1);
+    if($DDL_FILE eq $LIST_FILE){
+        errorMessage("Parameter --ddl-file can't be same with --list-file");
+    }
+    printMessage("INFO","DDL file: $DDL_FILE");
+    printMessage("INFO","List file: $LIST_FILE");
+}
+sub getVersion{
+    my $versionString = queryResult("SRC","SELECT version();","Scalar");
+    if($versionString =~ /Greenplum Database (\d)/){
+        $SRC_DATABASE_VERSION = int($1);
+    }
+    if($SRC_DATABASE_VERSION < 4 || $SRC_DATABASE_VERSION > 6){
+        errorMessage("Not supported source database version: $versionString");
+    }
+    $versionString = queryResult("DES","SELECT version();","Scalar");
+    if($versionString =~ /Greenplum Database (\d)/){
+        $DES_DATABASE_VERSION = int($1);
+    }
+    if($DES_DATABASE_VERSION < 4 || $DES_DATABASE_VERSION > 6){
+        errorMessage("Not supported destination database version: $versionString");
+    }
+}
+sub getKeyWord{
+    my @result = queryResult("DES",$SQL_GET_KEY_WORD);
+    for my $row(@result){
+        my ($word) = @$row;
+        $KEY_WORD_SET{$word} = "";
+    }
+    for my $schema(@SCHEMA_ARRAY){
+        $SPECIFY_SCHEMA_HASH{quote($schema)} = "";
+    }
+    if(@SCHEMA_ARRAY > 0){
+        $SPECIFY_SCHEMA = 1;
+    }else{
+        $SPECIFY_SCHEMA = undef;
+    }
+    for my $schema(@EX_SCHEMA_ARRAY){
+        $EX_SCHEMA_HASH{quote($schema)} = "";
+    }
+}
+sub checkLanguage{
+    for my $direction("SRC","DES"){
+        my $result = queryResult($direction,"SELECT 1 FROM pg_language WHERE lanname='plpythonu';","Scalar");
+        if("" eq $result){
+            queryResult($direction,"CREATE LANGUAGE plpythonu;");
+        }
+    }
+}
+sub checkEncodeFunction{
+    for my $direction("SRC","DES"){
+        my @result = queryResult($direction,$ENCODE_FUNCTION_ARG_CHECK_SQL);
+        my $has_problem = 0;
+        my $result_size = @result;
+        my $check_size = @ENCODE_FUNCTION_ARG_CHECK_VALUE;
+        if($result_size != $check_size){
+            $has_problem = 1;
+        }else{
+            for my $index(0 .. $result_size - 1){
+                my ($arg,$md5) = @{$result[$index]};
+                if($arg ne $ENCODE_FUNCTION_ARG_CHECK_VALUE[$index] || $md5 ne $ENCODE_FUNCTION_SRC_CHECK_MD5[$index]){
+                    $has_problem = 1;
+                    last;
+                }
+            }
+        }
+        if($has_problem){
+            for my $row(@result){
+                my ($arg,$md5) = @$row;
+                queryResult($direction,"DROP FUNCTION IF EXISTS gp_toolkit.mcencode($arg);");
+            }
+            queryResult($direction,$ENCODE_FUNCTION_DDL);
+        }
+    }
+}
+sub cacheRole{
+    my @result;
+    if($SRC_DATABASE_VERSION < 6){
+        @result = queryResult("SRC",$SQL_GET_ROLE);
+    }else{
+        @result = queryResult("SRC",$SQL_GET_ROLE_V6);
+    }
+    my $index = 0;
+    for my $row(@result){
+        my ($oid,$rolname) = @$row;
+        my $rolname = quote(decode($rolname));
+        $SRC_ID_MAP_OF_ROLE{$oid} = $rolname;
+    }
+    if($SRC_DATABASE_VERSION < 6){
+        @result = queryResult("DES",$SQL_GET_ROLE);
+    }else{
+        @result = queryResult("DES",$SQL_GET_ROLE_V6);
+    }
+    my $index = 0;
+    for my $row(@result){
+        my ($oid,$rolname) = @$row;
+        my $rolname = quote(decode($rolname));
+        $DES_ID_MAP_OF_ROLE{$oid} = $rolname;
+    }
+}
+sub cacheTablespace{
+    my @result  = queryResult("SRC",$SQL_GET_TABLESPACE);
+    for my $row(@result){
+        my ($oid,$spcname,$fsname) = @$row;
+        ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
+        $SRC_ID_MAP_OF_TABLESPACE{$oid} = $spcname;
+        $SRC_NAME_MAP_OF_TABLESPACE{$spcname} = "";
+    }
+    @result = queryResult("DES",$SQL_GET_TABLESPACE);
+    for my $row(@result){
+        my ($oid,$spcname,$fsname) = @$row;
+        ($spcname,$fsname) = (quote(decode($spcname)),quote(decode($fsname)));
+        $DES_ID_MAP_OF_TABLESPACE{$oid} = $spcname;
+        $DES_NAME_MAP_OF_TABLESPACE{$spcname} = "";
+    }
+}
+sub cacheDatabaseTablespace{
+    $SRC_DATABASE_TABLESPACE = queryResult("SRC",$SQL_GET_DATABASE_TABLESPACE,"Scalar");
+    $SRC_DATABASE_TABLESPACE = $SRC_ID_MAP_OF_TABLESPACE{$SRC_DATABASE_TABLESPACE};
+    $DES_DATABASE_TABLESPACE = queryResult("DES",$SQL_GET_DATABASE_TABLESPACE,"Scalar");
+    $DES_DATABASE_TABLESPACE = $DES_ID_MAP_OF_TABLESPACE{$DES_DATABASE_TABLESPACE};
+}
+sub cacheSchema{
+    my @result = queryResult("SRC",$SQL_GET_SCHEMA);
+    for my $row(@result){
+        my ($oid,$nspname) = @$row;
+        ($nspname) = (quote(decode($nspname)));
+        $SRC_ID_MAP_OF_SCHEMA{$oid} = $nspname;
+        $SRC_NAME_MAP_OF_SCHEMA{$nspname} = $oid;
+    }
+    @result = queryResult("DES",$SQL_GET_SCHEMA);
+    for my $row(@result){
+        my ($oid,$nspname) = @$row;
+        ($nspname) = (quote(decode($nspname)));
+        $DES_ID_MAP_OF_SCHEMA{$oid} = $nspname;
+        $DES_NAME_MAP_OF_SCHEMA{$nspname} = $oid;
+    }
+}
+sub cacheAttributeInformation{
+    my @result = queryResult("SRC",$SQL_GET_ATTRIBUTE);
+    for my $row(@result){
+        my ($attrelid,$attname,$atttype,$attnum,$attnotnull,$atthasdef,$attisdropped) = @$row;
+        ($attname,$atttype) = (quote(decode($attname)),decode($atttype));
+        my $key = $attrelid.".".$attnum;
+        $SRC_MAP_OF_ATTRIBUTE{$key} = [($attname,$atttype,$attnotnull,$atthasdef,$attisdropped)];
+    }
+    @result = queryResult("DES",$SQL_GET_ATTRIBUTE);
+    for my $row(@result){
+        my ($attrelid,$attname,$atttype,$attnum,$attnotnull,$atthasdef,$attisdropped) = @$row;
+        ($attname,$atttype) = (quote(decode($attname)),decode($atttype));
+        my $key = $attrelid.".".$attnum;
+        $DES_MAP_OF_ATTRIBUTE{$key} = [($attname,$atttype,$attnotnull,$atthasdef,$attisdropped)];
+    }
+    @result = queryResult("SRC",$SQL_GET_ATTRDEF);
+    for my $row(@result){
+        my ($adrelid,$adnum,$adsrc) = @$row;
+        ($adsrc) = (decode($adsrc));
+        my $key = $adrelid.".".$adnum;
+        $SRC_MAP_OF_ATTRDEF{$key} = $adsrc;
+    }
+    @result = queryResult("DES",$SQL_GET_ATTRDEF);
+    for my $row(@result){
+        my ($adrelid,$adnum,$adsrc) = @$row;
+        ($adsrc) = (decode($adsrc));
+        my $key = $adrelid.".".$adnum;
+        $DES_MAP_OF_ATTRDEF{$key} = $adsrc;
+    }
+    my $replicated_degree = $SRC_DATABASE_VERSION < 6 || $DES_DATABASE_VERSION < 6 ? "DISTRIBUTED RANDOMLY" : "DISTRIBUTED REPLICATED";
+    if($SRC_DATABASE_VERSION < 6){
+        @result = queryResult("SRC",$SQL_GET_DISTRIBUTION);
+    }else{
+        @result = queryResult("SRC",$SQL_GET_DISTRIBUTION_V6);
+    }
+    for my $row(@result){
+        my ($localoid,$attrnums,$policytype) = @$row;
+        if("r" eq $policytype){
+            $SRC_MAP_OF_DISTRIBUTION{$localoid} = $replicated_degree;
+            next;
+        }elsif("" eq $attrnums && "p" eq $policytype){
+            $SRC_MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED RANDOMLY";
+            next;
+        }
+        my $att_missing = 0;
+        my @dis_array = ();
+        if("" ne $attrnums){
+            for my $attr(split(/,/,$attrnums)){
+                my $key = $localoid.".".$attr;
+                if(!exists $SRC_MAP_OF_ATTRIBUTE{$key}){
+                    outwarn("Table with oid $localoid has no attribute with attnum $attr");
+                    $att_missing = 1;last;
+                }
+                my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$SRC_MAP_OF_ATTRIBUTE{$key}};
+                push @dis_array,$attname;
+            }
+        }
+        if(!$att_missing){
+            $SRC_MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED BY(".join(",",@dis_array).")";
+        }
+    }
+    if($DES_DATABASE_VERSION < 6){
+        @result = queryResult("DES",$SQL_GET_DISTRIBUTION);
+    }else{
+        @result = queryResult("DES",$SQL_GET_DISTRIBUTION_V6);
+    }
+    for my $row(@result){
+        my ($localoid,$attrnums,$policytype) = @$row;
+        if("r" eq $policytype){
+            $DES_MAP_OF_DISTRIBUTION{$localoid} = $replicated_degree;
+            next;
+        }elsif("" eq $attrnums && "p" eq $policytype){
+            $DES_MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED RANDOMLY";
+            next;
+        }
+        my $att_missing = 0;
+        my @dis_array = ();
+        if("" ne $attrnums){
+            for my $attr(split(/,/,$attrnums)){
+                my $key = $localoid.".".$attr;
+                if(!exists $DES_MAP_OF_ATTRIBUTE{$key}){
+                    outwarn("Table with oid $localoid has no attribute with attnum $attr");
+                    $att_missing = 1;last;
+                }
+                my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$DES_MAP_OF_ATTRIBUTE{$key}};
+                push @dis_array,$attname;
+            }
+        }
+        if(!$att_missing){
+            $DES_MAP_OF_DISTRIBUTION{$localoid} = "DISTRIBUTED BY(".join(",",@dis_array).")";
+        }
+    }
+}
+sub cacheCompType{
+    my @result = queryResult("SRC",$SQL_GET_COMPTYPE);
+    for my $row(@result){
+        my($oid,$relname,$relnamespace,$relowner,$relnatts) = @$row;
+        ($relname,$relnamespace) = (quote(decode($relname)),$SRC_ID_MAP_OF_SCHEMA{$relnamespace});
+        if(isTempSchema($relnamespace)){
+            next;
+        }
+        my @attribute_array;
+        for my $relattindex(1 .. $relnatts){
+            my $key = $oid.".".$relattindex;
+            my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$SRC_MAP_OF_ATTRIBUTE{$key}};
+            if("t" eq $attisdropped){
+                next;
+            }
+            my $attr_sql = $attname."    ".$atttype;
+            push @attribute_array,$attr_sql;
+        }
+        my $create = qq{CREATE TYPE $relnamespace.$relname AS (\n};
+        $create = $create.join(",\n",@attribute_array);
+        $create = $create."\n);";
+        $SRC_NAME_MAP_OF_COMPTYPE{$relnamespace.".".$relname} = $create;
+    }
+    @result = queryResult("DES",$SQL_GET_COMPTYPE);
+    for my $row(@result){
+        my($oid,$relname,$relnamespace,$relowner,$relnatts) = @$row;
+        ($relname,$relnamespace) = (quote(decode($relname)),$DES_ID_MAP_OF_SCHEMA{$relnamespace});
+        if(isTempSchema($relnamespace)){
+            next;
+        }
+        my @attribute_array;
+        for my $relattindex(1 .. $relnatts){
+            my $key = $oid.".".$relattindex;
+            my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$DES_MAP_OF_ATTRIBUTE{$key}};
+            if("t" eq $attisdropped){
+                next;
+            }
+            my $attr_sql = $attname."    ".$atttype;
+            push @attribute_array,$attr_sql;
+        }
+        my $create = qq{CREATE TYPE $relnamespace.$relname AS (\n};
+        $create = $create.join(",\n",@attribute_array);
+        $create = $create."\n);";
+        $DES_NAME_MAP_OF_COMPTYPE{$relnamespace.".".$relname} = $create;
+    }
+}
+sub cacheEnum{
+    if($SRC_DATABASE_VERSION >= 5){
+        my @result = queryResult("SRC",$SQL_GET_ENUM);
+        for my $row(@result){
+            my ($typname,$typnamespace,$typowner,$enumlabel) = @$row;
+            ($typname,$typnamespace) = (quote(decode($typname)),$SRC_ID_MAP_OF_SCHEMA{$typnamespace});
+            if(isTempSchema($typnamespace)){
+                next;
+            }
+            my @label_array;
+            for my $label(split(/,/,$enumlabel)){
+                $label = decode($label);
+                $label =~ s/'/''/g;
+                push @label_array, "'".$label."'";
+            }
+            my $create = qq{CREATE TYPE $typnamespace.$typname AS ENUM (\n};
+            $create = $create.join(",\n",@label_array)."\n);";
+            $SRC_MAP_OF_ENUM{$typnamespace.".".$typname} = $create;
+        }
+    }
+    if($DES_DATABASE_VERSION >= 5){
+        my @result = queryResult("DES",$SQL_GET_ENUM);
+        for my $row(@result){
+            my ($typname,$typnamespace,$typowner,$enumlabel) = @$row;
+            ($typname,$typnamespace) = (quote(decode($typname)),$DES_ID_MAP_OF_SCHEMA{$typnamespace});
+            if(isTempSchema($typnamespace)){
+                next;
+            }
+            my @label_array;
+            for my $label(split(/,/,$enumlabel)){
+                $label = decode($label);
+                $label =~ s/'/''/g;
+                push @label_array, "'".$label."'";
+            }
+            my $create = qq{CREATE TYPE $typnamespace.$typname AS ENUM (\n};
+            $create = $create.join(",\n",@label_array)."\n);";
+            $DES_MAP_OF_ENUM{$typnamespace.".".$typname} = $create;
+        }
+    }
+}
+sub cacheDomain{
+    my @result = queryResult("SRC",$SQL_GET_DOMAIN);
+    for my $row(@result){
+        my ($domname,$domnamespace,$typname,$typnamespace) = @$row;
+        ($domname,$domnamespace,$typname,$typnamespace) = (quote(decode($domname)),$SRC_ID_MAP_OF_SCHEMA{$domnamespace},quote(decode($typname)),$SRC_ID_MAP_OF_SCHEMA{$typnamespace});
+        if(isTempSchema($domnamespace)){
+            next;
+        }
+        $SRC_NAME_MAP_OF_DOMAIN{$domnamespace.".".$domname} = "CREATE DOMAIN ".$domnamespace.".".$domname." AS ".$typnamespace.".".$typname.";";
+    }
+    @result = queryResult("DES",$SQL_GET_DOMAIN);
+    for my $row(@result){
+        my ($domname,$domnamespace,$typname,$typnamespace) = @$row;
+        ($domname,$domnamespace,$typname,$typnamespace) = (quote(decode($domname)),$DES_ID_MAP_OF_SCHEMA{$domnamespace},quote(decode($typname)),$DES_ID_MAP_OF_SCHEMA{$typnamespace});
+        if(isTempSchema($domnamespace)){
+            next;
+        }
+        $DES_NAME_MAP_OF_DOMAIN{$domnamespace.".".$domname} = "CREATE DOMAIN ".$domnamespace.".".$domname." AS ".$typnamespace.".".$typname.";";
+    }
+}
+sub cacheSequence{
+    my (%src_sequnce_hash,%des_sequnce_hash);
+    my @result = queryResult("SRC",$SQL_GET_SEQUENCE);
+    my $index = 0;
+    my $sequece_size = @result;
+    my @query_array = ();
+    for my $row(@result){
+        my ($oid,$relnamespace,$relname) = @$row;
+        ($relname,$relnamespace) = (quote(decode($relname)),$SRC_ID_MAP_OF_SCHEMA{$relnamespace});
+        $index += 1;
+        if(!isTempSchema($relnamespace)){
+            $src_sequnce_hash{$oid} = $relnamespace.".".$relname;
+            push @query_array,qq{SELECT $oid,increment_by,min_value,max_value,last_value,cache_value,is_cycled FROM $relnamespace.$relname};
+        }
+        if($index % $SQL_BATCH == 0 || $index == $sequece_size){
+            for my $row(queryResult("SRC",join("\nUNION ALL\n",@query_array))){
+                my ($sid,$increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled) = @$row;
+                my $relation = $src_sequnce_hash{$sid};
+                $SRC_NAME_MAP_OF_SEQUENCE{$relation} = [($increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled)];
+            }
+            @query_array = ();
+        }
+    }
+    @result = queryResult("DES",$SQL_GET_SEQUENCE);
+    $index = 0;
+    $sequece_size = @result;
+    @query_array = ();
+    for my $row(@result){
+        my ($oid,$relnamespace,$relname) = @$row;
+        ($relname,$relnamespace) = (quote(decode($relname)),$DES_ID_MAP_OF_SCHEMA{$relnamespace});
+        $index += 1;
+        if(!isTempSchema($relnamespace)){
+            $des_sequnce_hash{$oid} = $relnamespace.".".$relname;
+            push @query_array,qq{SELECT $oid,increment_by,min_value,max_value,last_value,cache_value,is_cycled FROM $relnamespace.$relname};
+        }
+        if($index % $SQL_BATCH == 0 || $index == $sequece_size){
+            for my $row(queryResult("DES",join("\nUNION ALL\n",@query_array))){
+                my ($sid,$increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled) = @$row;
+                my $relation = $des_sequnce_hash{$sid};
+                $DES_NAME_MAP_OF_SEQUENCE{$relation} = [($increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled)];
+            }
+            @query_array = ();
+        }
+    }
+}
+sub cacheTableInformation{
+    my @result = queryResult("SRC",$SQL_GET_TABLE);
+    for my $row(@result){
+        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$relissubclass) = @$row;
+        ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$SRC_ID_MAP_OF_SCHEMA{$relnamespace},$SRC_ID_MAP_OF_ROLE{$relowner});
+        $reloptions = join(",",sort(split(/,/,$reloptions)));
+        my $key = $oid.".".$relnatts;
+        if(isTempSchema($relnamespace) || ($SPECIFY_SCHEMA && not exists $SPECIFY_SCHEMA_HASH{$relnamespace}) || exists $EX_SCHEMA_HASH{$relnamespace}){
+            next;
+        }elsif("f" eq $relissubclass){
+            if(!exists $SRC_MAP_OF_ATTRIBUTE{$key}){
+                outwarn("Source table $relnamespace.$relname missing attributes $key");
+                next;
+            }elsif(!exists $SRC_MAP_OF_DISTRIBUTION{$oid}){
+                outwarn("Source table $relnamespace.$relname has no correct distribution key");
+                next;
+            }
+        }
+        $SRC_ID_MAP_OF_TABLE{$oid} = $relnamespace.".".$relname;
+        if($reltablespace eq "0"){
+            $reltablespace = $SRC_DATABASE_TABLESPACE;
+        }else{
+            $reltablespace = $SRC_ID_MAP_OF_TABLESPACE{$reltablespace};
+        }
+        $SRC_NAME_MAP_OF_TABLE{$relnamespace.".".$relname} = [($oid,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,trim(uc($reloptions)))];
+    }
+    @result = queryResult("DES",$SQL_GET_TABLE);
+    for my $row(@result){
+        my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions,$relissubclass) = @$row;
+        ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$DES_ID_MAP_OF_SCHEMA{$relnamespace},$DES_ID_MAP_OF_ROLE{$relowner});
+        $reloptions = join(",",sort(split(/,/,$reloptions)));
+        my $key = $oid.".".$relnatts;
+        if(isTempSchema($relnamespace) || ($SPECIFY_SCHEMA && not exists $SPECIFY_SCHEMA_HASH{$relnamespace}) || exists $EX_SCHEMA_HASH{$relnamespace}){
+            next;
+        }elsif("f" eq $relissubclass){
+            if(!exists $DES_MAP_OF_ATTRIBUTE{$key}){
+                outwarn("Destination table $relnamespace.$relname missing attributes");
+                next;
+            }elsif(!exists $DES_MAP_OF_DISTRIBUTION{$oid}){
+                outwarn("Destination table $relnamespace.$relname has no correct distribution key");
+                next;
+            }
+        }
+        $DES_ID_MAP_OF_TABLE{$oid} = $relnamespace.".".$relname;
+        if($reltablespace eq "0"){
+            $reltablespace = $DES_DATABASE_TABLESPACE;
+        }else{
+            $reltablespace = $DES_ID_MAP_OF_TABLESPACE{$reltablespace};
+        }
+        $DES_NAME_MAP_OF_TABLE{$relnamespace.".".$relname} = [($oid,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,trim(uc($reloptions)))];
+    }
+}
+sub cachePartitionInformation{
+    my @result = queryResult("SRC",$SQL_GET_PARTITION);
+    for my $row(@result){
+        my ($oid,$parrelid,$parkind,$parlevel,$paristemplate,$paratts) = @$row;
+        my @attribute_array;
+        for my $att(split(/,/,$paratts)){
+            my $key = $parrelid.".".$att;
+            my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$SRC_MAP_OF_ATTRIBUTE{$key}};
+            push @attribute_array,$attname;
+        }
+        $paratts = join(",",@attribute_array);
+        my @partition_array;
+        if(exists $SRC_MAP_OF_PARTITION{$parrelid}){
+            @partition_array = @{$SRC_MAP_OF_PARTITION{$parrelid}};
+        }
+        push @partition_array,[($oid,$parkind,$parlevel,$paristemplate,$paratts)];
+        $SRC_MAP_OF_PARTITION{$parrelid} = [@partition_array];
+    }
+    @result = queryResult("SRC",$SQL_GET_PARTITION_RULE);
+    for my $row(@result){
+        my ($oid,$paroid,$parchildrelid,$parparentrule,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        ($parname,$parrangestart,$parrangeend,$rule_def) = (decode($parname),decode($parrangestart),decode($parrangeend),decode($rule_def));
+        $rule_def =~ s/::[^\(\)]+([\(]?[^\(\)]+[\)]?)?//g;
+        my $relation = $SRC_ID_MAP_OF_TABLE{$parchildrelid};
+        if($parname eq ""){
+            $parname = $relation;
+            $parname =~ s/^.+_prt_//;
+        }
+        $parname = quote($parname);
+        my $key = "0" eq $parparentrule ? $paroid.".".$parparentrule : $parparentrule;
+        my @rule_array;
+        if(exists $SRC_MAP_OF_PARTITION_RULE{$key}){
+            @rule_array = @{$SRC_MAP_OF_PARTITION_RULE{$key}};
+        }
+        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,trim($rule_def))];
+        $SRC_MAP_OF_PARTITION_RULE{$key} = [@rule_array];
+        $SRC_MAP_OF_PARTITION_COID{$parchildrelid} = "";
+    }
+    @result = queryResult("DES",$SQL_GET_PARTITION);
+    for my $row(@result){
+        my ($oid,$parrelid,$parkind,$parlevel,$paristemplate,$paratts) = @$row;
+        my @attribute_array;
+        for my $att(split(/,/,$paratts)){
+            my $key = $parrelid.".".$att;
+            my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$DES_MAP_OF_ATTRIBUTE{$key}};
+            push @attribute_array,$attname;
+        }
+        $paratts = join(",",@attribute_array);
+        my @partition_array;
+        if(exists $DES_MAP_OF_PARTITION{$parrelid}){
+            @partition_array = @{$DES_MAP_OF_PARTITION{$parrelid}};
+        }
+        push @partition_array,[($oid,$parkind,$parlevel,$paristemplate,$paratts)];
+        $DES_MAP_OF_PARTITION{$parrelid} = [@partition_array];
+    }
+    @result = queryResult("DES",$SQL_GET_PARTITION_RULE);
+    for my $row(@result){
+        my ($oid,$paroid,$parchildrelid,$parparentrule,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        ($parname,$parrangestart,$parrangeend,$rule_def) = (decode($parname),decode($parrangestart),decode($parrangeend),decode($rule_def));
+        $rule_def =~ s/::[^\(\)]+([\(]?[^\(\)]+[\)]?)?//g;
+        my $relation = $DES_ID_MAP_OF_TABLE{$parchildrelid};
+        if($parname eq ""){
+            $parname = $relation;
+            $parname =~ s/^.+_prt_//;
+        }
+        $parname = quote($parname);
+        my $key = "0" eq $parparentrule ? $paroid.".".$parparentrule : $parparentrule;
+        my @rule_array;
+        if(exists $DES_MAP_OF_PARTITION_RULE{$key}){
+            @rule_array = @{$DES_MAP_OF_PARTITION_RULE{$key}};
+        }
+        push @rule_array,[($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,trim($rule_def))];
+        $DES_MAP_OF_PARTITION_RULE{$key} = [@rule_array];
+        $DES_MAP_OF_PARTITION_COID{$parchildrelid} = "";
+    }
+}
+sub getRelationAuth{
+    my ($relation,$relowner,$relacl) = @_;
+    my @auth_array;
+    for my $acl(split(/,/,$relacl)){
+        my ($role,$value) = split(/:/,$acl,2);
+        ($role,$value) = (decode($role),decode($value));
+        $role = "PUBLIC" if "" eq $role;
+        $value =~ s/\/.*$//;
+        if($role eq $relowner){
+            push @auth_array,"REVOKE ALL ON TABLE $relation FROM $role;";
+        }
+        if($value eq "arwdDxt"){
+            push @auth_array,"GRANT ALL ON TABLE $relation TO $role;";
+        }else{
+           my @acl_array;
+           for my $ac(split(//,$value)){
+               push @acl_array,$RELATION_ACL_MAP{$ac};
+           }
+           push @auth_array,"GRANT ".join(", ",@acl_array)." ON TABLE $relation TO $role;";
+        }
+    }
+    return join("\n",@auth_array);
+}
+sub compareRelationAuth{
+    my ($relation) = @_;
+    my ($s_oid,$s_relowner,$s_reltablespace,$s_relnatts,$s_relhasoids,$s_relhassubclass,$s_relacl,$s_reloptions) = @{$SRC_NAME_MAP_OF_TABLE{$relation}};
+    my ($d_oid,$d_relowner,$d_reltablespace,$d_relnatts,$d_relhasoids,$d_relhassubclass,$d_relacl,$d_reloptions) = @{$DES_NAME_MAP_OF_TABLE{$relation}};
+    my (%src_auth_map,%des_auth_map);
+    for my $acl(split(/,/,$s_relacl)){
+        my ($role,$value) = split(/:/,$acl,2);
+        ($role,$value) = (decode($role),decode($value));
+        $role = "PUBLIC" if "" eq $role;
+        $value =~ s/\/.*$//;
+        $src_auth_map{$role} = $value;
+    }
+    if(!exists $src_auth_map{$s_relowner}){
+        $src_auth_map{$s_relowner} = "arwdDxt";
+    }
+    for my $acl(split(/,/,$d_relacl)){
+        my ($role,$value) = split(/:/,$acl,2);
+        ($role,$value) = (decode($role),decode($value));
+        $role = "PUBLIC" if "" eq $role;
+        $value =~ s/\/.*$//;
+        $des_auth_map{$role} = $value;
+    }
+    if(!exists $des_auth_map{$d_relowner}){
+        $des_auth_map{$d_relowner} = "arwdDxt";
+    }
+    my @auth_array;
+    for my $role(keys %src_auth_map){
+        if(exists $des_auth_map{$role} && $src_auth_map{$role} ne $des_auth_map{$role}){
+            push @auth_array,"REVOKE ALL ON TABLE $relation FROM $role;";
+        }
+        if(!exists $des_auth_map{$role} || $src_auth_map{$role} ne $des_auth_map{$role}){
+            if($src_auth_map{$role} eq "arwdDxt"){
+                push @auth_array,"GRANT ALL ON TABLE $relation TO $role;";
+            }else{
+               my @acl_array;
+               for my $ac(split(//,$src_auth_map{$role})){
+                   push @acl_array,$RELATION_ACL_MAP{$ac};
+               }
+               push @auth_array,"GRANT ".join(", ",@acl_array)." ON TABLE $relation TO $role;";
+            }
+        }
+    }
+    for my $role(keys %des_auth_map){
+        if(!exists $src_auth_map{$role}){
+            push @auth_array,"REVOKE ALL ON TABLE $relation FROM $role;";
+        }
+    }
+    return join("\n",@auth_array);
+}
+sub compareSchema{
+    my $index = 0;
+    for my $nspname(keys %DES_NAME_MAP_OF_SCHEMA){
+        my $oid = $DES_NAME_MAP_OF_SCHEMA{$nspname};
+        if(isTempSchema($nspname)){
+            next;
+        }
+        if($oid < 16384 && $oid != 2200){
+            next;
+        }
+        if(not exists $SRC_NAME_MAP_OF_SCHEMA{$nspname}){
+            outputTask("DROP SCHEMA $nspname CASCADE;",\$index,$TAIL_Schema);
+        }
+    }
+    for my $nspname(keys %SRC_NAME_MAP_OF_SCHEMA){
+        if(isTempSchema($nspname)){
+            next;
+        }
+        my $oid = $SRC_NAME_MAP_OF_SCHEMA{$nspname};
+        if($oid < 16384 && $oid != 2200){
+            next;
+        }
+        if(not exists $DES_NAME_MAP_OF_SCHEMA{$nspname}){
+            outputTask("CREATE SCHEMA $nspname;",\$index,$TAIL_Schema);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Schema);
+}
+sub compareCompType{
+    my $index = 0;
+    for my $comptype(keys %DES_NAME_MAP_OF_COMPTYPE){
+        if(not exists $SRC_NAME_MAP_OF_COMPTYPE{$comptype}){
+            outputTask("DROP TYPE $comptype CASCADE;",\$index,$TAIL_Type);
+        }elsif($SRC_NAME_MAP_OF_COMPTYPE{$comptype} ne $DES_NAME_MAP_OF_COMPTYPE{$comptype}){
+            outputTask("DROP TYPE $comptype CASCADE;\n".$SRC_NAME_MAP_OF_COMPTYPE{$comptype},\$index,$TAIL_Type);
+        }
+    }
+    for my $comptype(keys %SRC_NAME_MAP_OF_COMPTYPE){
+        if(not exists $DES_NAME_MAP_OF_COMPTYPE{$comptype}){
+            outputTask($SRC_NAME_MAP_OF_COMPTYPE{$comptype},\$index,$TAIL_Type);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Type);
+}
+sub compareEnum{
+    my $index = 0;
+    for my $enum(keys %DES_MAP_OF_ENUM){
+        if(not exists $SRC_MAP_OF_ENUM{$enum}){
+            outputTask("DROP TYPE $enum CASCADE;",\$index,$TAIL_Type);
+        }elsif($SRC_MAP_OF_ENUM{$enum} ne $DES_MAP_OF_ENUM{$enum}){
+            outputTask("DROP TYPE $enum CASCADE;\n".$SRC_MAP_OF_ENUM{$enum},\$index,$TAIL_Type);
+        }
+    }
+    for my $enum(keys %SRC_MAP_OF_ENUM){
+        if(not exists $DES_MAP_OF_ENUM{$enum}){
+            outputTask($SRC_MAP_OF_ENUM{$enum},\$index,$TAIL_Type);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Type);
+}
+sub compareDomain{
+    my $index = 0;
+    for my $domain(keys %DES_NAME_MAP_OF_DOMAIN){
+        if(not exists $SRC_NAME_MAP_OF_DOMAIN{$domain}){
+            outputTask("DROP DOMAIN $domain CASCADE;",\$index,$TAIL_Type);
+        }elsif($SRC_NAME_MAP_OF_DOMAIN{$domain} ne $DES_NAME_MAP_OF_DOMAIN{$domain}){
+            outputTask("DROP DOMAIN $domain CASCADE;\n".$SRC_NAME_MAP_OF_DOMAIN{$domain},\$index,$TAIL_Type);
+        }
+    }
+    for my $domain(keys %SRC_NAME_MAP_OF_DOMAIN){
+        if(not exists $DES_NAME_MAP_OF_DOMAIN{$domain}){
+            outputTask($SRC_NAME_MAP_OF_DOMAIN{$domain},\$index,$TAIL_Type);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Type);
+}
+sub compareSequence{
+    my $index = 0;
+    for my $sequence(keys %DES_NAME_MAP_OF_SEQUENCE){
+        my ($d_increment_by,$d_min_value,$d_max_value,$d_last_value,$d_cache_value,$d_is_cycled) = @{$DES_NAME_MAP_OF_SEQUENCE{$sequence}};
+        if(not exists $SRC_NAME_MAP_OF_SEQUENCE{$sequence}){
+            outputTask("DROP SEQUENCE ".$sequence." CASCADE;",\$index,$TAIL_Sequence);
+        }else{
+            my ($s_increment_by,$s_min_value,$s_max_value,$s_last_value,$s_cache_value,$s_is_cycled) = @{$SRC_NAME_MAP_OF_SEQUENCE{$sequence}};
+            my $alter_ddl = "";
+            if($s_increment_by ne $d_increment_by || $s_min_value ne $d_min_value || $s_max_value ne $d_max_value || $s_cache_value ne $d_cache_value || $s_is_cycled ne $d_is_cycled){
+                $alter_ddl = "ALTER SEQUENCE ".$sequence." INCREMENT ".$s_increment_by." MINVALUE ".$s_min_value." MAXVALUE ".$s_max_value;
+                $alter_ddl = $alter_ddl." RESTART ".$s_last_value." CACHE ".$s_cache_value.($s_is_cycled eq "t" ? " CYCLE" : " NO CYCLE").";";
+            }
+            if($alter_ddl ne ""){
+                outputTask($alter_ddl,\$index,$TAIL_Sequence);
+            }
+        }
+    }
+    for my $sequence(keys %SRC_NAME_MAP_OF_SEQUENCE){
+        if(not exists $DES_NAME_MAP_OF_SEQUENCE{$sequence}){
+            my ($s_increment_by,$s_min_value,$s_max_value,$s_last_value,$s_cache_value,$s_is_cycled) = @{$SRC_NAME_MAP_OF_SEQUENCE{$sequence}};
+            my $alter_ddl = "CREATE SEQUENCE ".$sequence." INCREMENT ".$s_increment_by." MINVALUE ".$s_min_value." MAXVALUE ".$s_max_value;
+            $alter_ddl = $alter_ddl." START ".$s_last_value." CACHE ".$s_cache_value.($s_is_cycled eq "t" ? " CYCLE" : " NO CYCLE").";";
+            outputTask($alter_ddl,\$index,$TAIL_Sequence);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Sequence);
+}
+sub compareTablespace{
+    my $index = 0;
+    for my $tablespace(keys %DES_NAME_MAP_OF_TABLESPACE){
+        if($DES_NAME_MAP_OF_TABLESPACE{$tablespace} eq "pg_system"){
+            next;
+        }
+        if(not exists $SRC_NAME_MAP_OF_TABLESPACE{$tablespace}){
+            outputTask("--DROP TABLESPACE $tablespace CASCADE;",\$index,$TAIL_TableSpace);
+        }
+    }
+    for my $tablespace(keys %SRC_NAME_MAP_OF_TABLESPACE){
+        if($SRC_NAME_MAP_OF_TABLESPACE{$tablespace} eq "pg_system"){
+            next;
+        }
+        if(not exists $DES_NAME_MAP_OF_TABLESPACE{$tablespace}){
+            outputTask("--CREATE TABLESPACE ".$tablespace.";",\$index,$TAIL_TableSpace);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_TableSpace);
+}
+sub getSrcAttribute{
+    my ($relation) = @_;
+    my ($oid,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @{$SRC_NAME_MAP_OF_TABLE{$relation}};
+    my @attribute_array;
+    for my $relattindex(1 .. $relnatts){
+        my $key = $oid.".".$relattindex;
+        my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$SRC_MAP_OF_ATTRIBUTE{$key}};
+        if("t" eq $attisdropped){
+            next;
+        }
+        my $attr_sql = $attname."    ".$atttype;
+        if("t" eq $attnotnull){
+            $attr_sql = $attr_sql." NOT NULL";
+        }
+        if("t" eq $atthasdef){
+            $attr_sql = $attr_sql." DEFAULT ".$SRC_MAP_OF_ATTRDEF{$key};
+        }
+        push @attribute_array,$attr_sql;
+    }
+    return join(",\n",@attribute_array);
+}
+sub getDesAttribute{
+    my ($relation) = @_;
+    my ($oid,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @{$DES_NAME_MAP_OF_TABLE{$relation}};
+    my @attribute_array;
+    for my $relattindex(1 .. $relnatts){
+        my $key = $oid.".".$relattindex;
+        my ($attname,$atttype,$attnotnull,$atthasdef,$attisdropped) = @{$DES_MAP_OF_ATTRIBUTE{$key}};
+        if("t" eq $attisdropped){
+            next;
+        }
+        my $attr_sql = $attname."    ".$atttype;
+        if("t" eq $attnotnull){
+            $attr_sql = $attr_sql." NOT NULL";
+        }
+        if("t" eq $atthasdef){
+            $attr_sql = $attr_sql." DEFAULT ".$DES_MAP_OF_ATTRDEF{$key};
+        }
+        push @attribute_array,$attr_sql;
+    }
+    return join(",\n",@attribute_array);
+}
+sub getDropPartitionTemplate{
+    my ($tablename,$template_list) = @_;
+    my @template_array = @$template_list;
+    @template_array =  sort {$b->[2] <=> $a->[2]} @template_array;
+    my $alter = "";
+    for my $template(@template_array){
+        my ($par_oid,$parkind,$parlevel,$paristemplate,$paratts) = @$template;
+        $alter = $alter."ALTER TABLE $tablename".(" ALTER PARTITION FOR (RANK(1))" x ($parlevel - 1))." SET SUBPARTITION TEMPLATE();"."\n";
+    }
+    return trim($alter);
+}
+sub getPartitionTemplate{
+    my ($tablename,$template_list) = @_;
+    my @template_array = @$template_list;
+    @template_array =  sort {$b->[2] <=> $a->[2]} @template_array;
+    my $alter = "";
+    for my $template(@template_array){
+        my ($par_oid,$parkind,$parlevel,$paristemplate,$paratts) = @$template;
+        $alter = $alter."ALTER TABLE $tablename".(" ALTER PARTITION FOR (RANK(1))" x ($parlevel - 1))." SET SUBPARTITION TEMPLATE"."\n";
+        my $key = $par_oid."."."0";
+        my @rule_array = @{$SRC_MAP_OF_PARTITION_RULE{$key}};
+        my @partition_array;
+        for my $row(@rule_array){
+            my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+            $rule_def =~ s/\s+$//;
+            push @partition_array,$INDENT.$rule_def;
+        }
+        $alter = $alter."(\n".join(",\n",@partition_array)."\n);\n";
+    }
+    return "" eq $alter ? "" : "\n".$alter;
+}
+sub getRuleDefinition{
+    my ($rule_def,$level,$partition_name,$reltablespace,$class_option) = @_;
+    if($class_option eq ""){
+        $class_option = "APPENDONLY=FALSE";
+    }
+    if($rule_def =~ /\s*WITH\s*\(.*\)\s*/){
+        $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($class_option) /;
+    }else{
+        if($rule_def =~ /\s*TABLESPACE\s*/){
+            $rule_def =~ s/\s*TABLESPACE\s*/ WITH($class_option) TABLESPACE /;
+        }else{
+            $rule_def = $rule_def." WITH($class_option)";
+        }
+    }
+    $rule_def =~ s/\s+EVERY\s+\([^\(]+\)//;
+    $rule_def =~ s/\s+$//;
+    if($rule_def !~ /\s*TABLESPACE\s*/){
+        $rule_def = $rule_def." TABLESPACE ".$reltablespace;
+    }
+    if(not $rule_def =~ /^PARTITION |^SUBPARTITION |^DEFAULT PARTITION |^DEFAULT SUBPARTITION /){
+        $rule_def = ($level > 1 ? "SUBPARTITION " : "PARTITION ").$partition_name." ".$rule_def;
+    }
+    return $rule_def;
+}
+sub getSrcNextLevelPartition{
+    my ($key,$level,$leaf_ref) = @_;
+    my @rule_array = @{$SRC_MAP_OF_PARTITION_RULE{$key}};
+    my @partition_array;
+    for my $row(@rule_array){
+        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my $relation = $SRC_ID_MAP_OF_TABLE{$parchildrelid};
+        my $class_option = @{$SRC_NAME_MAP_OF_TABLE{$relation}}[-1];
+        my $reltablespace = @{$SRC_NAME_MAP_OF_TABLE{$relation}}[2];
+        if($reltablespace eq ""){
+            $reltablespace = $SRC_DATABASE_TABLESPACE;
+        }
+        my $nextKey = $oid;
+        $rule_def = getRuleDefinition($rule_def,$level,$parname,$reltablespace,$class_option);
+        if(exists $SRC_MAP_OF_PARTITION_RULE{$nextKey}){
+            push @partition_array,($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getSrcNextLevelPartition($nextKey,$level + 1,$leaf_ref)."\n".($INDENT x $level).")";
+        }else{
+            push @partition_array,($INDENT x $level).$rule_def;
+            if($leaf_ref ne ""){
+                push @$leaf_ref,$relation;
+            }
+        }
+    }
+    return join(",\n",@partition_array);
+}
+sub getDesNextLevelPartition{
+    my ($key,$level,$leaf_ref) = @_;
+    my @rule_array = @{$DES_MAP_OF_PARTITION_RULE{$key}};
+    my @partition_array;
+    for my $row(@rule_array){
+        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my $relation = $DES_ID_MAP_OF_TABLE{$parchildrelid};
+        my $class_option = @{$DES_NAME_MAP_OF_TABLE{$relation}}[-1];
+        my $reltablespace = @{$DES_NAME_MAP_OF_TABLE{$relation}}[2];
+        if($reltablespace eq ""){
+            $reltablespace = $DES_DATABASE_TABLESPACE;
+        }
+        my $nextKey = $oid;
+        $rule_def = getRuleDefinition($rule_def,$level,$parname,$reltablespace,$class_option);
+        if(exists $DES_MAP_OF_PARTITION_RULE{$nextKey}){
+            push @partition_array,($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getDesNextLevelPartition($nextKey,$level + 1,$leaf_ref)."\n".($INDENT x $level).")";
+        }else{
+            push @partition_array,($INDENT x $level).$rule_def;
+            if($leaf_ref ne ""){
+                push @$leaf_ref,$relation;
+            }
+        }
+    }
+    return join(",\n",@partition_array);
+}
+sub getSrcPartitionDefinition{
+    my ($oid,$tablename) = @_;
+    my @partition_array = @{$SRC_MAP_OF_PARTITION{$oid}};
+    my @top_partition;
+    my @template_array;
+    my $partition_sql = "\n";
+    for my $partition(@partition_array){
+        my ($par_oid,$parkind,$parlevel,$paristemplate,$paratts) = @$partition;
+        if("t" eq $paristemplate){
+            push @template_array,[($par_oid,$parkind,$parlevel,$paristemplate,$paratts)];
+            next;
+        }
+        if("0" eq $parlevel){
+            push @top_partition,$par_oid;
+            $partition_sql = $partition_sql."PARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }else{
+            $partition_sql = $partition_sql."SUBPARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }
+    }
+    $partition_sql = $partition_sql."(\n";
+    for my $par_oid(@top_partition){
+        $partition_sql = $partition_sql.getSrcNextLevelPartition($par_oid."."."0",1);
+    }
+    $partition_sql = $partition_sql."\n);".getPartitionTemplate($tablename,\@template_array);
+    return $partition_sql;
+}
+sub getSrcCreate{
+    my ($relation) = @_;
+    my ($oid,$relowner,$reltablespace,$relnatts,$relhasoids,$relhassubclass,$relacl,$reloptions) = @{$SRC_NAME_MAP_OF_TABLE{$relation}};
+    my $distribution = $SRC_MAP_OF_DISTRIBUTION{$oid};
+    my $create = qq{CREATE TABLE $relation(\n};
+    $create = $create.getSrcAttribute($relation);
+    $create = $create."\n)\n";
+    $create = $create."WITH(OIDS=".("f" eq $relhasoids ? "FALSE" : "TRUE").("" eq $reloptions ? "" : ",".$reloptions).")\n";
+    if($reltablespace eq ""){
+        $reltablespace = $SRC_DATABASE_TABLESPACE;
+    }
+    $create = $create."TABLESPACE ".$reltablespace."\n";
+    $create = $create.$distribution;
+    if("t" eq $relhassubclass){
+        $create = $create.getSrcPartitionDefinition($oid,$relation,$reloptions)."\n";
+    }else{
+        $create = $create."\n;";
+    }
+    $create = $create.qq{\nALTER TABLE $relation OWNER TO $relowner;\n};
+    $create = $create.getRelationAuth($relation,$relowner,$relacl);
+    return $create;
+}
+sub compareTableOptions{
+    my ($relation) = @_;
+    my ($s_oid,$s_relowner,$s_reltablespace,$s_relnatts,$s_relhasoids,$s_relhassubclass,$s_relacl,$s_reloptions) = @{$SRC_NAME_MAP_OF_TABLE{$relation}};
+    my ($d_oid,$d_relowner,$d_reltablespace,$d_relnatts,$d_relhasoids,$d_relhassubclass,$d_relacl,$d_reloptions) = @{$DES_NAME_MAP_OF_TABLE{$relation}};
+    my $src_distribution = $SRC_MAP_OF_DISTRIBUTION{$s_oid};
+    my $des_distribution = $DES_MAP_OF_DISTRIBUTION{$d_oid};
+    if($s_relhasoids ne $d_relhasoids || $s_relhassubclass ne $d_relhassubclass || $s_reloptions ne $d_reloptions || $src_distribution ne $des_distribution){
+        return "True";
+    }
+    return "";
+}
+sub comparePartitionDefinition{
+    my ($relation) = @_;
+    my ($s_oid,$s_relowner,$s_reltablespace,$s_relnatts,$s_relhasoids,$s_relhassubclass,$s_relacl,$s_reloptions) = @{$SRC_NAME_MAP_OF_TABLE{$relation}};
+    my ($d_oid,$d_relowner,$d_reltablespace,$d_relnatts,$d_relhasoids,$d_relhassubclass,$d_relacl,$d_reloptions) = @{$DES_NAME_MAP_OF_TABLE{$relation}};
+    my @alter_leaf = ();
+    if($s_relhassubclass eq "f" && $d_relhassubclass eq "f"){
+        return ("",,\@alter_leaf);
+    }
+    my @src_partition_array = @{$SRC_MAP_OF_PARTITION{$s_oid}};
+    my @des_partition_array = @{$DES_MAP_OF_PARTITION{$d_oid}};
+    my (@src_template_array,@des_template_array);
+    my ($src_top_partition,$des_top_partition);
+    my ($src_partition_sql,$des_partition_sql) = ("","");
+    for my $src_partition(@src_partition_array){
+        my ($par_oid,$parkind,$parlevel,$paristemplate,$paratts) = @$src_partition;
+        if("t" eq $paristemplate){
+            push @src_template_array,[($par_oid,$parkind,$parlevel,$paristemplate,$paratts)];
+            next;
+        }
+        if("0" eq $parlevel){
+            $src_top_partition = $par_oid;
+            $src_partition_sql = $src_partition_sql."PARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }else{
+            $src_partition_sql = $src_partition_sql."SUBPARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }
+    }
+    for my $des_partition(@des_partition_array){
+        my ($par_oid,$parkind,$parlevel,$paristemplate,$paratts) = @$des_partition;
+        if("t" eq $paristemplate){
+            push @des_template_array,[($par_oid,$parkind,$parlevel,$paristemplate,$paratts)];
+            next;
+        }
+        if("0" eq $parlevel){
+            $des_top_partition = $par_oid;
+            $des_partition_sql = $des_partition_sql."PARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }else{
+            $des_partition_sql = $des_partition_sql."SUBPARTITION BY ".("l" eq $parkind ? "LIST" : "RANGE")."($paratts)\n";
+        }
+    }
+    if($src_partition_sql ne $des_partition_sql){
+        return ("DROP TABLE IF EXISTS $relation CASCADE;\n".getSrcCreate($relation),,\@alter_leaf);
+    }
+    my $src_key = $src_top_partition."."."0";
+    my $des_key = $des_top_partition."."."0";
+    my @src_rule_array = @{$SRC_MAP_OF_PARTITION_RULE{$src_top_partition."."."0"}};
+    my @des_rule_array = @{$DES_MAP_OF_PARTITION_RULE{$des_top_partition."."."0"}};
+    my (%src_partition_map,%des_partition_map,%src_parname_hash,%des_parname_hash);
+    my (@src_default_partition,@des_default_partition);
+    my (%src_leaf_hash,%des_leaf_hash);
+    my $level = 1;
+    for my $row(@src_rule_array){
+        my @src_leaf_relation = ();
+        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my $prt_relation = $SRC_ID_MAP_OF_TABLE{$parchildrelid};
+        $src_parname_hash{$prt_relation} = $parname;
+        my $class_option = @{$SRC_NAME_MAP_OF_TABLE{$prt_relation}}[-1];
+        my $reltablespace = @{$SRC_NAME_MAP_OF_TABLE{$prt_relation}}[2];
+        if($reltablespace eq ""){
+            $reltablespace = $SRC_DATABASE_TABLESPACE;
+        }
+        my $nextKey = $oid;
+        $rule_def = getRuleDefinition($rule_def,$level,$parname,$reltablespace,$class_option);
+        if(exists $SRC_MAP_OF_PARTITION_RULE{$nextKey}){
+            my $partition_ddl = ($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getSrcNextLevelPartition($nextKey,$level + 1,\@src_leaf_relation)."\n".($INDENT x $level).")";
+            if($parisdefault eq "t"){
+                @src_default_partition = ($prt_relation,$partition_ddl);
+            }
+            $src_partition_map{$prt_relation} = $partition_ddl;
+        }else{
+            my $partition_ddl = ($INDENT x $level).$rule_def;
+            if($parisdefault eq "t"){
+                @src_default_partition = ($prt_relation,$partition_ddl);
+            }
+            $src_partition_map{$prt_relation} = $partition_ddl;
+            push @src_leaf_relation,$prt_relation;
+        }
+        $src_leaf_hash{$prt_relation} = \@src_leaf_relation;
+    }
+    for my $row(@des_rule_array){
+        my @des_leaf_relation = ();
+        my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my $prt_relation = $DES_ID_MAP_OF_TABLE{$parchildrelid};
+        $des_parname_hash{$prt_relation} = $parname;
+        my $class_option = @{$DES_NAME_MAP_OF_TABLE{$prt_relation}}[-1];
+        my $reltablespace = @{$DES_NAME_MAP_OF_TABLE{$prt_relation}}[2];
+        if($reltablespace eq ""){
+            $reltablespace = $DES_DATABASE_TABLESPACE;
+        }
+        my $nextKey = $oid;
+        $rule_def = getRuleDefinition($rule_def,$level,$parname,$reltablespace,$class_option);
+        if(exists $DES_MAP_OF_PARTITION_RULE{$nextKey}){
+            my $partition_ddl = ($INDENT x $level).$rule_def."\n".($INDENT x $level)."(\n".getDesNextLevelPartition($nextKey,$level + 1,\@des_leaf_relation)."\n".($INDENT x $level).")";
+            if($parisdefault eq "t"){
+                @des_default_partition = ($prt_relation,$partition_ddl);
+            }
+            $des_partition_map{$prt_relation} = $partition_ddl;
+        }else{
+            my $partition_ddl = ($INDENT x $level).$rule_def;
+            if($parisdefault eq "t"){
+                @des_default_partition = ($prt_relation,$partition_ddl);
+            }
+            $des_partition_map{$prt_relation} = $partition_ddl;
+            push @des_leaf_relation,$prt_relation;
+        }
+        $des_leaf_hash{$prt_relation} = \@des_leaf_relation;
+    }
+    my ($add_partition,$drop_partition_count) = ("",0);
+    my @alter_array;
+    for my $partition(keys %des_partition_map){
+        if($partition eq $des_default_partition[0]){
+            next;
+        }else{
+            if(not exists $src_partition_map{$partition}){
+                $drop_partition_count += 1;
+                push @alter_array,"ALTER TABLE $relation DROP PARTITION ".$des_parname_hash{$partition}.";";
+            }elsif($src_partition_map{$partition} ne $des_partition_map{$partition}){
+                $drop_partition_count += 1;
+                $add_partition = "1";
+                push @alter_array,"ALTER TABLE $relation DROP PARTITION ".$des_parname_hash{$partition}.";";
+                my $partition_ddl = $src_partition_map{$partition};
+                push @alter_array,"ALTER TABLE $relation ADD\n".$partition_ddl.";\n";
+                push @alter_leaf,@{$src_leaf_hash{$partition}};
+            }
+        }
+    }
+    for my $partition(keys %src_partition_map){
+        if($partition eq $src_default_partition[0]){
+            next;
+        }else{
+            if(not exists $des_partition_map{$partition}){
+                $add_partition = "1";
+                my $partition_ddl = $src_partition_map{$partition};
+                push @alter_array,"ALTER TABLE $relation ADD\n".$partition_ddl.";\n";
+                push @alter_leaf,@{$src_leaf_hash{$partition}};
+            }
+        }
+    }
+    my (@alter_before,@alter_after);
+    my $drop_default_partition = "";
+    if($add_partition ne "" || (@src_default_partition == 0 && @des_default_partition == 2) || $src_default_partition[0] ne $des_default_partition[0] || $src_default_partition[1] ne $des_default_partition[1]){
+        push @alter_before,"ALTER TABLE $relation DROP DEFAULT PARTITION IF EXISTS;";
+        my $drop_template = getDropPartitionTemplate($relation,\@des_template_array);
+        if($drop_template ne ""){
+            push @alter_before,$drop_template;
+        }
+        $drop_default_partition = "1";
+    }
+    if($drop_default_partition ne "" && @src_default_partition == 2){
+        push @alter_after,"ALTER TABLE $relation ADD\n".$src_partition_map{$src_default_partition[0]}.";";
+        push @alter_leaf,$src_default_partition[0];
+        my $create_template = getPartitionTemplate($relation,\@src_template_array);
+        if($create_template ne ""){
+            push @alter_after,$create_template;
+        }
+    }
+    my $remain_partition_count = (keys %des_partition_map) - $drop_partition_count;
+    if(@des_default_partition == 2){
+        $remain_partition_count -= 1;
+    }
+    if($remain_partition_count == 0){
+        return ("DROP TABLE IF EXISTS $relation CASCADE;\n".getSrcCreate($relation),[($relation)]);
+    }
+    return (trim(join("\n",@alter_before)."\n".join("\n",@alter_array)."\n".join("\n",@alter_after)),\@alter_leaf);
+}
+sub compareTableDefinition{
+    my ($relation) = @_;
+    my $src_attribute = getSrcAttribute($relation);
+    my $des_attribute = getDesAttribute($relation);
+    if($src_attribute ne $des_attribute){
+        return ("DROP TABLE IF EXISTS $relation CASCADE;\n".getSrcCreate($relation),[($relation)]);
+    }else{
+        my $different = compareTableOptions($relation);
+        if($different ne ""){
+            return ("DROP TABLE IF EXISTS $relation CASCADE;\n".getSrcCreate($relation),[($relation)]);
+        }else{
+            return comparePartitionDefinition($relation);
+        }
+    }
+}
+sub compareTable{
+    my $index = 0;
+    for my $oid(keys %DES_ID_MAP_OF_TABLE){
+        my $relation = $DES_ID_MAP_OF_TABLE{$oid};
+        if(exists $DES_MAP_OF_PARTITION_COID{$oid}){
+            next;
+        }
+        if(not exists $SRC_NAME_MAP_OF_TABLE{$relation}){
+            outputTask("DROP TABLE IF EXISTS $relation CASCADE;",\$index,$TAIL_Table);
+        }else{
+            my ($alter_ddl,$alter_leaf) = compareTableDefinition($relation);
+            if($alter_ddl eq ""){
+                my $alter_auth = compareRelationAuth($relation);
+                if($alter_auth ne ""){
+                    outputTask($alter_auth,\$index,$TAIL_Table);
+                }
+            }else{
+                outputTask($alter_ddl,\$index,$TAIL_Table);
+            }
+            outputList(@$alter_leaf);
+        }
+    }
+    for my $oid(keys %SRC_ID_MAP_OF_TABLE){
+        my $relation = $SRC_ID_MAP_OF_TABLE{$oid};
+        if(exists $SRC_MAP_OF_PARTITION_COID{$oid}){
+            next;
+        }
+        if(not exists $DES_NAME_MAP_OF_TABLE{$relation}){
+            my $create = getSrcCreate($relation);
+            outputTask($create,\$index,$TAIL_Table);
+            outputList($relation);
+        }
+    }
+    outputRegionEnd(\$index,$TAIL_Table);
+}
+sub closeFile{
+    if($DDL_FILE_HANDLE){
+        close $DDL_FILE_HANDLE;
+    }
+    if($LIST_FILE_HANDLE){
+        close $LIST_FILE_HANDLE;
+    }
+}
+sub main{
+    getOption();
+    checkOption();
+    getVersion();
+    getKeyWord();
+    checkLanguage();
+    checkEncodeFunction();
+    cacheRole();
+    cacheTablespace();
+    cacheDatabaseTablespace();
+    cacheSchema();
+    cacheAttributeInformation();
+    cacheCompType();
+    cacheEnum();
+    cacheDomain();
+    cacheSequence();
+    cacheTableInformation();
+    cachePartitionInformation();
+    compareSchema();
+    compareCompType();
+    compareEnum();
+    compareDomain();
+    compareSequence();
+    compareTablespace();
+    compareTable();
+    closeFile();
+}
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
+main();
