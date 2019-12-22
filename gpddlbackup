@@ -245,6 +245,7 @@ $CMD_NAME [--database database]
   [-S <schema> [-S <schema>] ...]
   [-f filename]
   [--target-version gpversion]
+  [--reloption filename]
   [-h|--help]
   [--version]
 
