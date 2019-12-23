@@ -36,8 +36,8 @@ my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY 
     SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
         WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
     ) x, pg_type t WHERE t.oid = x.typs[x.idx] GROUP BY x.oid,x.proname,x.prosrc ORDER BY 1;};
-my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","name","text","_text");
-my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad","cac17fe8e01235f96a4805ccc268443d");
+my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","_text","name","text");
+my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","cac17fe8e01235f96a4805ccc268443d","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad");
 my $ENCODE_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str text) returns varchar as $$
 import base64
 if str == None:
@@ -199,7 +199,7 @@ FROM pg_class v,pg_namespace nv,pg_depend dv,pg_class t,pg_namespace nt,pg_depen
 WHERE dv.objid = dt.objid AND dv.refobjid <> dt.refobjid
     AND v.oid = dv.refobjid AND v.relnamespace = nv.oid AND (nv.oid > 16384 OR nv.nspname = 'public') AND dv.refclassid = 1259
     AND t.oid = dt.refobjid AND t.relnamespace = nt.oid AND (nt.oid > 16384 OR nt.nspname = 'public') AND dt.refclassid = 1259
-    AND v.relkind = 'v' AND dv.deptype = 'i' AND nv.nspname NOT LIKE E'pg\_temp\_%' AND nv.nspname NOT LIKE E'pg\_toast\_temp\_%'
+    AND v.relkind IN ('m','v') AND dv.deptype = 'i' AND nv.nspname NOT LIKE E'pg\_temp\_%' AND nv.nspname NOT LIKE E'pg\_toast\_temp\_%'
     GROUP BY 1,2,3;};
 my $SQL_GET_EXTTABLE_FMT_V4 = qq{SELECT reloid,gp_toolkit.mcencode(location),fmttype,gp_toolkit.mcencode(fmtopts),
 gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
@@ -216,11 +216,11 @@ my $SQL_GET_EXTTABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,r
 FROM pg_class
 WHERE relstorage = 'x' AND (relnamespace >= 16384 OR relnamespace = 2200);};
 
-my $SQL_GET_VIEW = qq{SELECT c.relnamespace,c.oid,c.relowner,gp_toolkit.mcencode(relacl),
+my $SQL_GET_VIEW = qq{SELECT c.relnamespace,c.reltablespace,c.relkind,c.oid,c.relowner,gp_toolkit.mcencode(relacl),array_to_string(c.reloptions,','),
     gp_toolkit.mcencode(c.relname),
     gp_toolkit.mcencode(pg_get_viewdef(c.oid))
 FROM pg_class c,pg_namespace n
-WHERE c.relnamespace=n.oid AND c.relkind='v' AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
+WHERE c.relnamespace = n.oid AND c.relkind IN('m','v') AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
 
 my $SQL_GET_INDEX = q{SELECT indrelid, c.relnamespace,gp_toolkit.mcencode(pg_get_indexdef(indexrelid))
 FROM pg_index i, pg_class c, pg_namespace n
@@ -1558,7 +1558,7 @@ sub outputView{
     my @result = queryResult($SQL_GET_VIEW);
     my @temp_depth_array;
     for my $row(@result){
-        my ($relnamespace,$oid,$relowner,$relacl,$relname,$viewdef) = @$row;
+        my ($relnamespace,$reltablespace,$relkind,$oid,$relowner,$relacl,$reloptions,$relname,$viewdef) = @$row;
         ($relname,$viewdef,$relnamespace,$relowner) = (quote(decode($relname)),decode($viewdef),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         my $depth = $MAP_OF_VIEW_DEPTH{$oid};
         if("" eq $depth){
@@ -1568,20 +1568,29 @@ sub outputView{
             $temp_depth_array[$depth] = [()];
         }
         my @view_array = @{$temp_depth_array[$depth]};
-        push @view_array,[($relnamespace,$relname,$relowner,$relacl,$viewdef)];
+        push @view_array,[($relnamespace,$reltablespace,$relkind,$oid,$relowner,$relacl,$reloptions,$relname,trim($viewdef))];
         $temp_depth_array[$depth] = [@view_array];
     }
     for my $depth_list(@temp_depth_array){
         my $index = 0;
         for my $row(@$depth_list){
-            my ($relnamespace,$relname,$relowner,$relacl,$viewdef) = @$row;
+            my ($relnamespace,$reltablespace,$relkind,$oid,$relowner,$relacl,$reloptions,$relname,$viewdef) = @$row;
             if(isTempSchema($relnamespace) || skipThisSchema($relnamespace)){
                 next;
             }
-            outputTask(qq{CREATE OR REPLACE VIEW $relnamespace.$relname AS $viewdef},\$index,$TAIL_View);
-            output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
-            if($relacl ne ""){
-                output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+            if($relkind eq "m"){
+                outputTask(qq{DROP MATERIALIZED VIEW IF EXISTS $relnamespace.$relname;},\$index,$TAIL_View);
+                if($reloptions eq ""){
+                    $reloptions = "APPENDONLY=FALSE";
+                }
+                $viewdef =~ s/;$/ $MAP_OF_DISTRIBUTION{$oid};/;
+                output(qq{CREATE MATERIALIZED VIEW $relnamespace.$relname WITH($reloptions)}.("0" eq $reltablespace ? "" : " TABLESPACE ".$MAP_OF_TABLESPACE{$reltablespace}).qq{ AS $viewdef});
+            }else{
+                outputTask(qq{CREATE OR REPLACE VIEW $relnamespace.$relname AS $viewdef},\$index,$TAIL_View);
+                output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
+                if($relacl ne ""){
+                    output(getRelationAuth($relnamespace,$relname,$relowner,$relacl));
+                }
             }
         }
         outputRegionEnd(\$index,$TAIL_View);

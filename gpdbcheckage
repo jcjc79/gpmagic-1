@@ -30,8 +30,8 @@ my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY 
     SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
         WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
     ) x, pg_type t WHERE t.oid = x.typs[x.idx] GROUP BY x.oid,x.proname,x.prosrc ORDER BY 1;};
-my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","name","text","_text");
-my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad","cac17fe8e01235f96a4805ccc268443d");
+my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","_text","name","text");
+my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","cac17fe8e01235f96a4805ccc268443d","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad");
 my $ENCODE_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str text) returns varchar as $$
 import base64
 if str == None:
