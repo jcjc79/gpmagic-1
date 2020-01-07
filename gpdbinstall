@@ -25,25 +25,26 @@ my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARR
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$MAJOR_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my (%SEGMENT_IP_HASH,%SEGMENT_HOST_HASH,%EXISTS_IP_HASH,%EXISTS_HOST_HASH,$EXISTS_MIRROR,$PRIMARY_COUNT,$MIRROR_COUNT,$MAX_CONTENT,$MAX_DBID);
 my %DEFAULT_GPCONFIG = (
-        "default_statistics_target"                   => [("4+","-v 15 -m 15")],
-        "from_collapse_limit"                         => [("4+","-v 10 -m 10")],
-        "gp_autostats_mode_in_functions"              => [("4+","-v ON_NO_STATS -m ON_NO_STATS")],
-        "gp_create_table_random_default_distribution" => [("4+","-v on -m on")],
-        "gp_enable_relsize_collection"                => [("4+","-v on -m on")],
-        "gp_max_local_distributed_cache"              => [("4+","-v 1048576")],
-        "gp_max_partition_level"                      => [("4+","-v 1 -m 1")],
-        "gp_segment_connect_timeout"                  => [("4+","-v 180 -m 180")],
-        "gp_workfile_compress_algorithm"              => [("5-","-v zlib -m zlib")],
-        "gp_workfile_compression"                     => [("6+","-v on -m on")],
-        "gp_workfile_limit_per_query"                 => [("4+","-v 134217728 -m 134217728")],
-        "gp_workfile_limit_per_segment"               => [("4+","-v 134217728 -m 134217728")],
-        "join_collapse_limit"                         => [("4+","-v 10 -m 10")],
-        "log_min_duration_statement"                  => [("4+","-v 30000 -m 30000")],
-        "log_timezone"                                => [("4+","-v HONGKONG -m HONGKONG")],
-        "max_appendonly_tables"                       => [("4+","-v 50000 -m 50000")],
-        "max_fsm_pages"                               => [("5-","-v 2000000 -m 2000000")],
-        "max_fsm_relations"                           => [("5-","-v 30000 -m 30000")],
-        "writable_external_table_bufsize"             => [("4+","-v 16MB -m 16MB")],
+        "default_statistics_target"                   => [("4.0.0~"  ,"-v 15 -m 15")],
+        "from_collapse_limit"                         => [("4.0.0~"  ,"-v 10 -m 10")],
+        "gp_autostats_mode_in_functions"              => [("4.0.0~"  ,"-v ON_NO_STATS -m ON_NO_STATS")],
+        "gp_create_table_random_default_distribution" => [("4.3.4~"  ,"-v on -m on")],
+        "gp_enable_relsize_collection"                => [("4.3.10~" ,"-v on -m on")],
+        "gp_max_local_distributed_cache"              => [("4.0.0~"  ,"-v 1048576")],
+        "gp_max_partition_level"                      => [("4.0.0~"  ,"-v 1 -m 1")],
+        "gp_segment_connect_timeout"                  => [("4.0.0~"  ,"-v 180 -m 180")],
+        "gp_workfile_compress_algorithm"              => [("~5.0.0"  ,"-v zlib -m zlib")],
+        "gp_workfile_compression"                     => [("6.0.0~"  ,"-v on -m on")],
+        "gp_workfile_limit_per_query"                 => [("4.0.0~"  ,"-v 134217728 -m 134217728")],
+        "gp_workfile_limit_per_segment"               => [("4.0.0~"  ,"-v 134217728 -m 134217728")],
+        "join_collapse_limit"                         => [("4.0.0~"  ,"-v 10 -m 10")],
+        "log_min_duration_statement"                  => [("4.0.0~"  ,"-v 30000 -m 30000")],
+        "log_timezone"                                => [("4.0.0~"  ,"-v HONGKONG -m HONGKONG")],
+        "max_appendonly_tables"                       => [("4.0.0~"  ,"-v 50000 -m 50000")],
+        "max_fsm_pages"                               => [("~5.0.0"  ,"-v 2000000 -m 2000000")],
+        "max_fsm_relations"                           => [("~5.0.0"  ,"-v 30000 -m 30000")],
+        "optimizer_enable_motion_gather"              => [("5.0.0~"  ,"-v off -m off")],
+        "writable_external_table_bufsize"             => [("4.3.7~"  ,"-v 16MB -m 16MB")],
 );
 my ($COMMAND_FILE_NAME,$EXKEYS_FILE_NAME) = ($WORK_PATH."/install_command.sh",$WORK_PATH."/gpsshexkeys");
 my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
@@ -845,19 +846,24 @@ sub installLocalBinary{
                     errorMessage("Unzip install file $INSTALL_FILE to $WORK_PATH occur error:\n".$output);
                 }
             }
-            if($INSTALL_FILE !~ /\.bin$/){
-                errorMessage("Unidentified file format:\n".$INSTALL_FILE);
-            }
-            system(qq{if [ -f /etc/cgsl-release ];then sudo touch /etc/redhat-release;fi});
-            my $command = qq{sudo bash $INSTALL_FILE};
-            executeWithExpect($command,0,([["license agreement","q"]]),([["yes|no","yes"]]),([["installation path",""]]),([["yes|no","yes",1],["*#"]]));
-            logMessage("INFO","Try to get install path");
-            if($INSTALL_FILE =~ /(\d+(\.\d+){2,3})/){
-                $binary_version = $1;
+            if($binary_version ne "" && $INSTALL_FILE =~ /\.bin$/ && -f "/etc/cgsl-release"){
+                my $install_path = "/usr/local/greenplum-db-$binary_version/";
+                my $install_command = qq{sudo mkdir -p $install_path;sudo sh -c "cat $INSTALL_FILE|sed '1,/^__END_HEADER__/d'|tar zxf - -C $install_path"};
+                system($install_command);
+                $env_file = "/usr/local/greenplum-db-$binary_version/greenplum_path.sh";
+                if(-f $env_file){
+                    system(qq{sudo sh -c "sed s%^GPHOME=/.*%GPHOME=/usr/local/greenplum-db-$binary_version% -i $env_file"});
+                    $INSTALL_VERSION = $binary_version;
+                }
+            }elsif($binary_version ne "" && $INSTALL_FILE =~ /\.bin$/){
+                my $command = qq{sudo bash $INSTALL_FILE};
+                executeWithExpect($command,0,([["license agreement","q"]]),([["yes|no","yes"]]),([["installation path",""]]),([["yes|no","yes",1],["*#"]]));
                 $env_file = "/usr/local/greenplum-db-$binary_version/greenplum_path.sh";
                 if(-f $env_file){
                     $INSTALL_VERSION = $binary_version;
                 }
+            }else{
+                errorMessage("Unidentified file format:\n".$INSTALL_FILE);
             }
         }
     }else{
@@ -985,8 +991,8 @@ fi#);
     executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
 }
 sub installBinary{
-    system(qq{sed /LD_PRELOAD/d -i /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh});
-    system(qq{echo 'export LD_PRELOAD=/lib64/libz.so.1 ps' >> /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh});
+    system(qq{sudo sed /LD_PRELOAD/d -i /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh});
+    system(qq{sudo sh -c "echo 'export LD_PRELOAD=/lib64/libz.so.1 ps' >> /usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh"});
     system(qq{sudo sed 's/^\\s*MASTER_IPV6_LOCAL_ADDRESS_ALL.*/                MASTER_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/gpinitsystem});
     system(qq{sudo sed 's/^\\s*SEGMENT_IPV6_LOCAL_ADDRESS_ALL.*/        SEGMENT_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/lib/gpcreateseg.sh});
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
@@ -1377,12 +1383,21 @@ sub gpConfig{
             $gp_config_hash{$key} = $DEFAULT_GPCONFIG{$key};
         }
     }
+    my @version_array = split(/\./,$INSTALL_VERSION);
+    my $version_number = int($version_array[0]) * 1000000 + int($version_array[1]) * 1000 + int($version_array[2]);
     for my $key(sort keys %gp_config_hash){
         my ($version,$config) = @{$gp_config_hash{$key}};
-        my $gpconfig = qq{sudo su - $GP_ADMIN_NAME <<END_OF_COMMAND\n. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1\n};
-        if(($version =~ /\+$/ && int($version) <= $MAJOR_VERSION) || ($version =~ /-$/ && int($version) >= $MAJOR_VERSION)){
-            $gpconfig = $gpconfig.qq{gpconfig -c $key }.$config.qq{\nEND_OF_COMMAND};
-            system($gpconfig);
+        if($version =~ /~/){
+            my ($begin,$end) = split(/~/,$version);
+            my @b_array = split(/\./,$begin);
+            my $b_number = int($b_array[0]) * 1000000 + int($b_array[1]) * 1000 + int($b_array[2]);
+            my @e_array = split(/\./,$end);
+            my $e_number = int($e_array[0]) * 1000000 + int($e_array[1]) * 1000 + int($e_array[2]);
+            if($b_number <= $version_number && $version_number <= $e_number){
+                my $gpconfig = qq{sudo su - $GP_ADMIN_NAME <<END_OF_COMMAND\n. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1\n};
+                $gpconfig = $gpconfig.qq{gpconfig -c $key }.$config.qq{\nEND_OF_COMMAND};
+                system($gpconfig);
+            }
         }
     }
 }
