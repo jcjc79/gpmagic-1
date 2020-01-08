@@ -1460,7 +1460,7 @@ sub prepareExpandRing{
                         }
                         push @mirror_config_list,$m_config;
                     }
-                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index,$port_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1,$port_index + 1);
                 }
             }
         }
@@ -1508,7 +1508,7 @@ sub prepareExpandPair{
                         }
                         push @mirror_config_list,$m_config;
                     }
-                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index,$port_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1,$port_index + 1);
                 }
             }
             if($index + 1 >= $ring_size){
@@ -1538,7 +1538,7 @@ sub prepareExpandPair{
                         }
                         push @mirror_config_list,$m_config;
                     }
-                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1);
+                    ($primary_dbid_index,$mirror_dbid_index,$content_index,$primary_index,$port_index) = ($primary_dbid_index + 1,$mirror_dbid_index + 1,$content_index + 1,$primary_index + 1,$port_index + 1);
                 }
             }
         }
